@@ -27,7 +27,7 @@ logging.basicConfig(
 logger = logging.getLogger("Collector")
 
 # ── Ayarlar ───────────────────────────────────────────────────────────────────
-BROWSER_DATA_DIR = os.getcwd()  # unrar, browser_data.rar içeriğini doğrudan çalışma dizinine çıkarır
+BROWSER_DATA_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "browser_data")
 BINOMO_URL = "https://binomo.com"
 CANDLE_SECONDS = 5
 WINDOW_SIZE = 60
@@ -1038,22 +1038,47 @@ async def status_reporter():
 
 def attach_ws_listeners(ws):
     url = ws.url
-    logger.info(f"[WS BAGLANDI] {url}")
+    logger.info(f"[WS BAGLANDI] >>> URL: {url}")
     if "as.binomo.com" in url:
+        logger.info(f"[WS] Fiyat akisi (as.binomo.com) baglandi!")
         ws.on("framereceived", lambda p: handle_as_message(p))
+    elif "binomo.com" in url or "bn." in url or "bnomo" in url.lower():
+        logger.info(f"[WS] Genel Binomo WS baglandi: {url}")
+        ws.on("framereceived", lambda p: handle_ws_message(p))
     else:
+        logger.info(f"[WS] Bilinmeyen WS (dinleniyor): {url}")
         ws.on("framereceived", lambda p: handle_ws_message(p))
     ws.on("close", lambda: logger.info(f"[WS KAPANDI] {url}"))
 
 # ── Playwright & WebSocket Veri Toplayıcı Akışı ───────────────────────────────
 
 async def run_collector():
+    # CI/CD tespiti
+    is_ci = os.environ.get("CI") or os.environ.get("GITHUB_ACTIONS")
+    if is_ci:
+        logger.info("[CI/CD] GitHub Actions ortami tespit edildi.")
+    logger.info(f"[PROFILE] Kullanilan profil dizini: {BROWSER_DATA_DIR}")
+
+    # Profil dizini kontrolü
+    default_dir = os.path.join(BROWSER_DATA_DIR, "Default")
+    if os.path.isdir(default_dir):
+        logger.info(f"[PROFILE] Default/ klasoru BULUNDU: {default_dir}")
+    else:
+        logger.warning(f"[PROFILE] UYARI: Default/ klasoru YOK! ({default_dir}) - Profil yuklenmeyecek!")
+        logger.warning(f"[PROFILE] Dizindeki dosyalar: {os.listdir(BROWSER_DATA_DIR)[:10]}")
+
     async with async_playwright() as pw:
         context = await pw.chromium.launch_persistent_context(
             user_data_dir=BROWSER_DATA_DIR,
             headless=True,
-            args=["--no-sandbox"],
-            viewport=None,
+            args=[
+                "--no-sandbox",
+                "--disable-dev-shm-usage",
+                "--disable-blink-features=AutomationControlled",
+                "--disable-setuid-sandbox",
+            ],
+            ignore_https_errors=True,
+            viewport={"width": 1280, "height": 800},
         )
 
         async def on_new_page(page):
@@ -1067,7 +1092,23 @@ async def run_collector():
         page = context.pages[0] if context.pages else await context.new_page()
 
         logger.info(">>> Binomo platformu arka planda yukleniyor...")
-        await page.goto(BINOMO_URL, wait_until="domcontentloaded")
+        try:
+            await page.goto(BINOMO_URL, wait_until="domcontentloaded", timeout=60000)
+        except Exception as e:
+            logger.error(f"[GOTO HATA] {e}")
+
+        # Sayfa durumunu logla
+        current_url = page.url
+        logger.info(f"[SAYFA URL] Yuklenen sayfa: {current_url}")
+
+        # Login kontrolü
+        if "sign-in" in current_url or "login" in current_url or "auth" in current_url:
+            logger.warning("[LOGIN] UYARI: Sayfa login sayfasina yonlendirdi! Profil/cookie gecersiz olmis olabilir.")
+        elif "trade" in current_url or "en" in current_url:
+            logger.info("[LOGIN] Sayfa trading platformunda gorünüyor. [OK]")
+        else:
+            logger.info(f"[LOGIN] Sayfa durumu belirsiz: {current_url}")
+
         logger.info(">>> WebSocket akisi dinleniyor. Veri toplama aktif! [OK]")
 
         asyncio.create_task(status_reporter())
