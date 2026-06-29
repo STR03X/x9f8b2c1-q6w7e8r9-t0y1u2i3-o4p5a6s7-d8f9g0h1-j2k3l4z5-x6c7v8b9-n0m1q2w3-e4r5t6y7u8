@@ -50,22 +50,12 @@ jobs:
             touch dataset.csv
           fi
 
-          # Botu başlat, logları kaydet
-          python collector.py > bot_output.log 2>&1 &
-          BOT_PID=$!
-          echo "Bot PID: $BOT_PID"
-
-          # 5 dakika bekle, ilk logları kontrol et
-          sleep 300
-          echo "=== İLK 5 DAKİKA LOGLARI ==="
-          cat bot_output.log | tail -50
-
-          # Kalan süreyi bekle (21000 - 300 = 20700 saniye)
-          sleep 20700
-          pkill -f collector.py || true
-
-          echo "=== SON LOGLAR ==="
-          cat bot_output.log | tail -30
+          timeout 21000 python -u collector.py 2>&1 | tee bot_output.log
+          STATUS=${PIPESTATUS[0]}
+          if [ $STATUS -ne 0 ] && [ $STATUS -ne 124 ]; then
+            echo "Bot Hata ile Sonlandi: $STATUS"
+            exit $STATUS
+          fi
 
       - name: Debug Dosyalarını Yükle (Teşhis İçin)
         if: always()
