@@ -90,8 +90,8 @@ CSV_HEADERS = [
 ]
 
 def init_csv():
-    """CSV dosyasını hazırlar, başlıklar yoksa ekler."""
-    if not os.path.exists(CSV_PATH):
+    """CSV dosyasını hazırlar, başlıklar yoksa veya içi boşsa ekler."""
+    if not os.path.exists(CSV_PATH) or os.path.getsize(CSV_PATH) == 0:
         with open(CSV_PATH, "w", newline="", encoding="utf-8") as f:
             writer = csv.writer(f)
             writer.writerow(CSV_HEADERS)
@@ -1065,7 +1065,15 @@ async def run_collector():
         logger.info(f"[PROFILE] Default/ klasoru BULUNDU: {default_dir}")
     else:
         logger.warning(f"[PROFILE] UYARI: Default/ klasoru YOK! ({default_dir}) - Profil yuklenmeyecek!")
-        logger.warning(f"[PROFILE] Dizindeki dosyalar: {os.listdir(BROWSER_DATA_DIR)[:10]}")
+        if os.path.exists(BROWSER_DATA_DIR):
+            logger.warning(f"[PROFILE] Dizindeki dosyalar: {os.listdir(BROWSER_DATA_DIR)[:10]}")
+        else:
+            logger.warning(f"[PROFILE] browser_data klasoru bulunmuyor, otomatik olusturulacak.")
+
+    auth_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "auth.json")
+    storage_state = auth_path if os.path.exists(auth_path) else None
+    if storage_state:
+        logger.info(f"[AUTH] auth.json dosyasi bulundu, oturum verileri enjekte edilecek.")
 
     async with async_playwright() as pw:
         context = await pw.chromium.launch_persistent_context(
@@ -1080,6 +1088,17 @@ async def run_collector():
             ignore_https_errors=True,
             viewport={"width": 1280, "height": 800},
         )
+
+        if storage_state:
+            try:
+                with open(storage_state, "r", encoding="utf-8") as f:
+                    state = json.load(f)
+                cookies = state.get("cookies", [])
+                if cookies:
+                    await context.add_cookies(cookies)
+                    logger.info(f"[AUTH] {len(cookies)} adet cerez basariyla enjekte edildi.")
+            except Exception as e:
+                logger.error(f"[AUTH HATA] Cerezler enjekte edilirken hata: {e}")
 
         async def on_new_page(page):
             page.on("websocket", attach_ws_listeners)
@@ -1103,11 +1122,11 @@ async def run_collector():
 
         # Login kontrolü
         if "sign-in" in current_url or "login" in current_url or "auth" in current_url:
-            logger.warning("[LOGIN] UYARI: Sayfa login sayfasina yonlendirdi! Profil/cookie gecersiz olmis olabilir.")
-        elif "trade" in current_url or "en" in current_url:
+            logger.warning("[LOGIN] UYARI: Sayfa login sayfasina yonlendirdi! auth.json veya profil gecersiz olmis olabilir.")
+        elif "trade" in current_url:
             logger.info("[LOGIN] Sayfa trading platformunda gorünüyor. [OK]")
         else:
-            logger.info(f"[LOGIN] Sayfa durumu belirsiz: {current_url}")
+            logger.info(f"[LOGIN] Sayfa durumu belirsiz (oturum acilmamis olabilir): {current_url}")
 
         logger.info(">>> WebSocket akisi dinleniyor. Veri toplama aktif! [OK]")
 
