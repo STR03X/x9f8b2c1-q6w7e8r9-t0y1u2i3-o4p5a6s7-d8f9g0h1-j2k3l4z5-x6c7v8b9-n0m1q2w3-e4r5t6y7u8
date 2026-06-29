@@ -5,64 +5,35 @@ import os
 import csv
 import logging
 import sys
-import threading
 from datetime import datetime, timezone
 from collections import deque
 from typing import Any
 from playwright.async_api import async_playwright
-import colorama
-from colorama import Fore, Back, Style
-
-# Initialize colorama
-colorama.init()
 
 # ── Logging Ayarları ──────────────────────────────────────────────────────────
-# We keep log messages in a deque to render them inside our CLI UI
-recent_logs = deque(maxlen=8)
-
-RUNNING_IN_CI = True
-
-class CLILogHandler(logging.Handler):
-    def emit(self, record):
-        try:
-            msg = self.format(record)
-            recent_logs.append(msg)
-            if not RUNNING_IN_CI:
-                trigger_ui_update()
-        except Exception:
-            pass
-
-# Sadece WARNING ve üzeri (Hata ve Çökmeler) logları dosyaya yazılsın
 crash_handler = logging.FileHandler("crash.log", encoding="utf-8")
 crash_handler.setLevel(logging.WARNING)
 crash_handler.setFormatter(logging.Formatter("%(asctime)s [%(levelname)s] %(message)s"))
 
-handlers = [crash_handler]
-if RUNNING_IN_CI:
-    stdout_handler = logging.StreamHandler(sys.stdout)
-    stdout_handler.setLevel(logging.INFO)
-    stdout_handler.setFormatter(logging.Formatter("%(asctime)s [%(levelname)s] %(message)s"))
-    handlers.append(stdout_handler)
+stdout_handler = logging.StreamHandler(sys.stdout)
+stdout_handler.setLevel(logging.INFO)
+stdout_handler.setFormatter(logging.Formatter("%(asctime)s [%(levelname)s] %(message)s"))
 
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [%(levelname)s] %(message)s",
-    handlers=handlers
+    handlers=[crash_handler, stdout_handler]
 )
 logger = logging.getLogger("Collector")
 
-cli_handler = CLILogHandler()
-cli_handler.setFormatter(logging.Formatter("%(asctime)s [%(levelname)s] %(message)s"))
-logger.addHandler(cli_handler)
-
 # ── Ayarlar ───────────────────────────────────────────────────────────────────
-BROWSER_DATA_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "browser_data")
+BROWSER_DATA_DIR = os.getcwd()  # unrar, browser_data.rar içeriğini doğrudan çalışma dizinine çıkarır
 BINOMO_URL = "https://binomo.com"
 CANDLE_SECONDS = 5
 WINDOW_SIZE = 60
 MIN_TICKS = 5
 YATAY_TOLERANCE_PCT = 0.0001  # %0.01 tolerans aralığı altındaki değişimler YATAY kabul edilir.
-os.makedirs(BROWSER_DATA_DIR, exist_ok=True)
+
 
 # ── Veri Depoları ─────────────────────────────────────────────────────────────
 ticks = []
@@ -80,7 +51,7 @@ current_std = 0.0
 current_radius = 0.0
 current_range_coeff = 1.0
 current_minute = None
-ui_page: Any = None
+
 
 # Smart Money & Session Analysis
 current_smart_money = {
@@ -785,226 +756,12 @@ if os.path.exists(CSV_PATH):
     except Exception:
         total_saved_count = 0
 
-# UI update lock
-ui_lock = threading.Lock()
-last_ui_update_time = 0.0
-ui_needs_update = False
-collector_status = "ÇEVRİMDIŞI"
 last_tick_price = 0.0
-gradient_phase = 0.0
 is_running = True
-confirming_exit = False
-
-TRADEIUM_LOGO = [
-    r" ████████╗██████╗  █████╗ ██████╗ ███████╗██╗██╗   ██╗███╗   ███╗",
-    r" ╚══██╔══╝██╔══██╗██╔══██╗██╔══██╗██╔════╝██║██║   ██║████╗ ████║",
-    r"    ██║   ██████╔╝███████║██║  ██║█████╗  ██║██║   ██║██╔████╔██║",
-    r"    ██║   ██╔══██╗██╔══██║██║  ██║██╔══╝  ██║██║   ██║██║╚██╔╝██║",
-    r"    ██║   ██║  ██║██║  ██║██████╔╝███████╗██║╚██████╔╝██║ ╚═╝ ██║",
-    r"    ╚═╝   ╚═╝  ╚═╝╚═╝  ╚═╝╚═════╝ ╚══════╝╚═╝ ╚═════╝ ╚═╝     ╚═╝"
-]
-
-def trigger_ui_update():
-    global ui_needs_update
-    ui_needs_update = True
-
-def get_gradient_rgb(col, total_cols, phase):
-    # Wrap phase between 0.0 and 1.0 to ensure looping
-    phase = phase % 1.0
-    
-    # Base Green color (Wise Lime Green)
-    base_r, base_g, base_b = 159, 232, 112
-    
-    # Sweep goes from left to right.
-    # To add a natural delay between sweeps, we use a virtual width.
-    virtual_width = total_cols * 1.6
-    sweep_pos = (phase * virtual_width) - (virtual_width - total_cols) / 2
-    
-    # Distance of the character's column from the sweep highlight position
-    dist = abs(col - sweep_pos)
-    
-    # Width of the white sweep shine
-    shine_width = 8.0
-    
-    if dist < shine_width:
-        import math
-        # Smooth cosine glow distribution
-        factor = math.cos((dist / shine_width) * (math.pi / 2)) ** 2
-    else:
-        factor = 0.0
-        
-    # Interpolate base purple to white highlight
-    r = int(base_r + (255 - base_r) * factor)
-    g = int(base_g + (255 - base_g) * factor)
-    b = int(base_b + (255 - base_b) * factor)
-    
-    return r, g, b
-
-def print_line(content=""):
-    sys.stdout.write(f"{content}\033[K\n")
-
-def format_log_line(log_line):
-    parts = log_line.split(" ", 2)
-    if len(parts) >= 3:
-        ts = parts[0] + " " + parts[1]
-        rest = parts[2]
-        
-        level = ""
-        msg = rest
-        if rest.startswith("[INFO]"):
-            level = f"{Fore.GREEN}[INFO]{Style.RESET_ALL}"
-            msg = rest[6:]
-        elif rest.startswith("[WARN]"):
-            level = f"{Fore.YELLOW}[WARN]{Style.RESET_ALL}"
-            msg = rest[6:]
-        elif rest.startswith("[ERROR]"):
-            level = f"{Fore.RED}[ERROR]{Style.RESET_ALL}"
-            msg = rest[7:]
-        elif rest.startswith("[DEBUG]"):
-            level = f"{Fore.CYAN}[DEBUG]{Style.RESET_ALL}"
-            msg = rest[7:]
-            
-        if level:
-            return f"{Fore.LIGHTBLACK_EX}{ts}{Style.RESET_ALL} {level} {Fore.WHITE}{msg.strip()}{Style.RESET_ALL}"
-            
-    if "[ERROR]" in log_line or "[COLLECTOR HATA]" in log_line:
-        return f"{Fore.RED}{log_line}{Style.RESET_ALL}"
-    elif "[WARN]" in log_line:
-        return f"{Fore.YELLOW}{log_line}{Style.RESET_ALL}"
-    elif "[INFO]" in log_line or "[OK]" in log_line:
-        return f"{Fore.GREEN}{log_line}{Style.RESET_ALL}"
-    return f"{Fore.WHITE}{log_line}{Style.RESET_ALL}"
-
-def draw_dashboard():
-    if RUNNING_IN_CI:
-        return
-    global last_ui_update_time, ui_needs_update, collector_status, last_tick_price, gradient_phase, confirming_exit
-    now = time.time()
-    # Throttled to ~15-20 FPS for smooth transitions
-    if now - last_ui_update_time < 0.05:
-        return
-    
-    with ui_lock:
-        last_ui_update_time = now
-        ui_needs_update = False
-        
-        # Buffer to hold all lines of the screen
-        buffer = []
-        
-        # Print Animated Gradient ASCII Art Logo
-        logo_width = len(TRADEIUM_LOGO[0])
-        for row in TRADEIUM_LOGO:
-            line_str = ""
-            for col_idx, char in enumerate(row):
-                if char != " ":
-                    r, g, b = get_gradient_rgb(col_idx, logo_width, gradient_phase)
-                    line_str += f"\033[38;2;{r};{g};{b}m{char}"
-                else:
-                    line_str += " "
-            buffer.append("      " + line_str + Style.RESET_ALL)
-            
-        buffer.append(f"  {Fore.LIGHTBLACK_EX}──────────────────────────────────────────────────────────────────────────{Style.RESET_ALL}")
-        
-        # Status Row (Combined to save height)
-        status_color = Fore.RED
-        if collector_status == "BAĞLANTI AKTİF":
-            status_color = Fore.GREEN
-        elif collector_status == "PLATFORM YÜKLENİYOR":
-            status_color = Fore.YELLOW
-            
-        status_lbl = f"{Fore.WHITE}DURUM: {status_color}{Style.BRIGHT}{collector_status}{Style.RESET_ALL}"
-        price_lbl = f"{Fore.WHITE}FİYAT: {Fore.CYAN}{Style.BRIGHT}{last_tick_price:.5f}{Style.RESET_ALL}"
-        pending_lbl = f"{Fore.WHITE}BEKLEYEN: {Fore.YELLOW}{len(pending_rows)}{Style.RESET_ALL}"
-        buffer.append(f"  {status_lbl}  {Fore.LIGHTBLACK_EX}│{Style.RESET_ALL}  {price_lbl}  {Fore.LIGHTBLACK_EX}│{Style.RESET_ALL}  {pending_lbl}")
-        
-        buffer.append(f"  {Fore.LIGHTBLACK_EX}──────────────────────────────────────────────────────────────────────────{Style.RESET_ALL}")
-        
-        # Saved Candles progress bar
-        target = 50000
-        progress_pct = min(100.0, total_saved_count / target * 100)
-        bar_length = 20
-        filled_length = int(round(bar_length * progress_pct / 100))
-        bar = "█" * filled_length + "░" * (bar_length - filled_length)
-        
-        progress_info = f"{total_saved_count:,} / {target:,} ({progress_pct:.2f}%)"
-        buffer.append(f"  {Fore.GREEN}[•]{Fore.WHITE} MUM VERİLERİ  {Fore.LIGHTBLACK_EX}:: [{bar}]{Style.RESET_ALL}   {Fore.WHITE}{progress_info}{Style.RESET_ALL}")
-        buffer.append("")
-        
-        # Market Sentiment
-        call_pct = current_sentiment["call"]
-        put_pct = current_sentiment["put"]
-        s_bar_len = 20
-        s_call_len = int(round(s_bar_len * call_pct / 100))
-        s_put_len = s_bar_len - s_call_len
-        s_bar = f"{Fore.GREEN}{'█' * s_call_len}{Fore.RED}{'█' * s_put_len}{Style.RESET_ALL}"
-        
-        sentiment_info = f"CALL {call_pct}% │ PUT {put_pct}%"
-        buffer.append(f"  {Fore.GREEN}[•]{Fore.WHITE} PİYASA EĞİLİMİ{Fore.LIGHTBLACK_EX}:: [{s_bar}]{Style.RESET_ALL}   {Fore.WHITE}{sentiment_info}{Style.RESET_ALL}")
-        buffer.append("")
-        
-        # Indicators Row (Combined)
-        analysis = analyze_candles()
-        rsi_str = "—"
-        rsi_color = Fore.WHITE
-        ema_str = "—"
-        regime_str = "—"
-        regime_color = Fore.CYAN
-        
-        if analysis:
-            rsi_val = analysis['rsi']
-            rsi_str = f"{rsi_val:.1f}"
-            if rsi_val > 70:
-                rsi_color = Fore.RED
-            elif rsi_val < 30:
-                rsi_color = Fore.GREEN
-            else:
-                rsi_color = Fore.WHITE
-                
-            ema_str = f"{analysis['ema9']:.5f}"
-            regime_str = analysis['market_regime']
-            if "TREND" in regime_str:
-                regime_color = Fore.GREEN
-            else:
-                regime_color = Fore.CYAN
-                
-        rsi_part = f"RSI: {rsi_color}{Style.BRIGHT}{rsi_str}{Style.RESET_ALL}"
-        ema_part = f"EMA(9): {Fore.WHITE}{ema_str}{Style.RESET_ALL}"
-        regime_part = f"REJİM: {regime_color}{Style.BRIGHT}{regime_str}{Style.RESET_ALL}"
-        buffer.append(f"  {Fore.GREEN}[•]{Fore.WHITE} TEKNİK BİLGİ  {Fore.LIGHTBLACK_EX}:: {rsi_part}  {Fore.LIGHTBLACK_EX}│{Style.RESET_ALL}  {ema_part}  {Fore.LIGHTBLACK_EX}│{Style.RESET_ALL}  {regime_part}")
-        
-        buffer.append(f"  {Fore.LIGHTBLACK_EX}──────────────────────────────────────────────────────────────────────────{Style.RESET_ALL}")
-        
-        # System Logs Header
-        buffer.append(f"  {Fore.WHITE}{Style.BRIGHT}SİSTEM GÜNLÜKLERİ:{Style.RESET_ALL}")
-        
-        # System Logs (Last 5 logs subset to stay compact and prevent scrolling)
-        recent_logs_subset = list(recent_logs)[-5:]
-        log_count = 0
-        for log_line in recent_logs_subset:
-            log_count += 1
-            colored_log = format_log_line(log_line)
-            buffer.append(f"   {Fore.LIGHTBLACK_EX}• {Style.RESET_ALL}{colored_log}")
-                
-        # Fill remaining lines to keep viewport height stable
-        for _ in range(5 - log_count):
-            buffer.append("")
-            
-        buffer.append(f"  {Fore.LIGHTBLACK_EX}──────────────────────────────────────────────────────────────────────────{Style.RESET_ALL}")
-        if confirming_exit:
-            buffer.append(f"  {Fore.RED}{Style.BRIGHT} [!] Kapatmak istediğinize emin misiniz? (Evet: 'E' / Hayır: 'H') {Style.RESET_ALL}")
-        else:
-            buffer.append(f"  {Fore.LIGHTBLACK_EX} [ Kapatmak için klavyeden {Fore.WHITE}{Style.BRIGHT}Q{Style.RESET_ALL}{Fore.LIGHTBLACK_EX} veya {Fore.WHITE}{Style.BRIGHT}ESC{Style.RESET_ALL}{Fore.LIGHTBLACK_EX} tuşuna basın ]{Style.RESET_ALL}")
-        
-        # Write entire frame atomically. We position to top-left and apply clear line to end (\033[K) on every row
-        # This resolves the Alt-Tab duplication bug and prevents console scrolling
-        final_output = "\033[H" + "\n".join([f"{line}\033[K" for line in buffer]) + "\n"
-        sys.stdout.write(final_output)
-        sys.stdout.flush()
 
 def update_cli_stats(last_price=0.0):
     global last_tick_price
     last_tick_price = last_price
-    trigger_ui_update()
 
 def save_row_to_csv(data_row, target_time, future_price, price_change, pnl_result):
     global total_saved_count
@@ -1213,6 +970,10 @@ def handle_as_message(payload):
                     ticks.append({"rate": rate, "ask": ask or rate, "bid": bid or rate, "ts": ts})
                     update_cli_stats(rate)
 
+def trigger_ui_update():
+    """Placeholder for UI refresh; called when shared state (sentiment, range, smart money) changes."""
+    pass
+
 def handle_ws_message(payload):
     global current_sentiment, current_std, current_radius, current_range_coeff
     global current_smart_money, session_start_time, session_range_coefficient
@@ -1273,7 +1034,7 @@ async def status_reporter():
     while is_running:
         await asyncio.sleep(10)
         sentiment_str = f"CALL {current_sentiment['call']}% | PUT {current_sentiment['put']}%"
-        logger.info(f"[DURUM] Kaydedilen Mumlar: {total_saved_count} | Fiyat: {last_tick_price:.5f} | Bekleyen: {len(pending_rows)} | Egilim: {sentiment_str}")
+        logger.info(f"[DURUM] Kaydedilecek Mumlar: {total_saved_count} | Fiyat: {last_tick_price:.5f} | Bekleyen: {len(pending_rows)} | Egilim: {sentiment_str}")
 
 def attach_ws_listeners(ws):
     url = ws.url
@@ -1287,7 +1048,6 @@ def attach_ws_listeners(ws):
 # ── Playwright & WebSocket Veri Toplayıcı Akışı ───────────────────────────────
 
 async def run_collector():
-    global collector_status
     async with async_playwright() as pw:
         context = await pw.chromium.launch_persistent_context(
             user_data_dir=BROWSER_DATA_DIR,
@@ -1307,95 +1067,25 @@ async def run_collector():
         page = context.pages[0] if context.pages else await context.new_page()
 
         logger.info(">>> Binomo platformu arka planda yukleniyor...")
-        collector_status = "PLATFORM YUKLENIYOR"
-        trigger_ui_update()
-
         await page.goto(BINOMO_URL, wait_until="domcontentloaded")
         logger.info(">>> WebSocket akisi dinleniyor. Veri toplama aktif! [OK]")
-        collector_status = "BAGLANTI AKTIF"
-        trigger_ui_update()
 
-        if RUNNING_IN_CI:
-            asyncio.create_task(status_reporter())
+        asyncio.create_task(status_reporter())
 
         try:
             while is_running:
                 await asyncio.sleep(1)
-                # Render/update terminal screen if dirty
-                if ui_needs_update:
-                    draw_dashboard()
         except Exception as e:
             logger.error(f"[COLLECTOR HATA] Arka plan dongusu koptu: {e}")
-            collector_status = "BAGLANTI KESILDI"
-            trigger_ui_update()
-            draw_dashboard()
         finally:
             await context.close()
 
-# ── UI Refresh Loop for Console (Falls updates are too slow/dormant) ──────────
-def ui_refresh_loop():
-    global gradient_phase, is_running, confirming_exit
-    import select
-    import termios
-    import tty
-
-    def get_key_linux():
-        if not sys.stdin.isatty():
-            return None
-        fd = sys.stdin.fileno()
-        old_settings = termios.tcgetattr(fd)
-        try:
-            tty.setraw(fd)
-            rlist, _, _ = select.select([sys.stdin], [], [], 0.0)
-            if rlist:
-                return sys.stdin.read(1)
-        except Exception:
-            pass
-        finally:
-            try:
-                termios.tcsetattr(fd, termios.TCSADRAIN, old_settings)
-            except Exception:
-                pass
-        return None
-
-    # Keep dashboard responsive and animate gradient
-    while is_running:
-        gradient_phase += 0.02
-        draw_dashboard()
-        
-        # Check for keyboard inputs on Linux
-        key_str = get_key_linux()
-        if key_str:
-            key_str = key_str.lower()
-            if confirming_exit:
-                if key_str == 'e' or key_str == 'y':
-                    is_running = False
-                elif key_str == 'h' or key_str == 'n' or key_str == '\x1b':
-                    confirming_exit = False
-                    trigger_ui_update()
-            else:
-                if key_str == 'q' or key_str == '\x1b':  # 'q' or Esc key
-                    confirming_exit = True
-                    trigger_ui_update()
-                
-        time.sleep(0.05)  # ~20 FPS for smooth gradient animation
-
 # ── Ana Giriş ─────────────────────────────────────────────────────────────────
+# ── Ana Giriş ───────────────────────────────────────────────────────────
 
 def main():
     global is_running
-    if not RUNNING_IN_CI:
-        # Clear console once at startup to prepare clean drawing surface
-        sys.stdout.write("\033[2J\033[H")
-        sys.stdout.flush()
-
-        # Start UI refreshing thread
-        t_ui = threading.Thread(target=ui_refresh_loop, daemon=True)
-        t_ui.start()
-    else:
-        logger.info("CI/CD (GitHub Actions) ortami algilandi. CLI Dashboard ve terminal animasyonlari devre disi birakildi, standart loglama aktif.")
-    
-    # Run collector main loop
+    logger.info("Veri toplayici basliyor. Durdurmak icin Ctrl+C kullanin.")
     try:
         asyncio.run(run_collector())
     except KeyboardInterrupt:
@@ -1404,9 +1094,6 @@ def main():
         logger.error(f"Kritik Hata: {e}")
     finally:
         is_running = False
-        if not RUNNING_IN_CI:
-            # Clear screen and exit cleanly
-            sys.stdout.write("\033[H\033[2J")
         print("Uygulama kapatildi.")
         sys.exit(0)
 
