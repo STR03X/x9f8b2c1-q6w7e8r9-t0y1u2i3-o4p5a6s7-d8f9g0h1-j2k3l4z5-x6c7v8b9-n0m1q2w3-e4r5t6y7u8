@@ -15,7 +15,7 @@ jobs:
       - name: Python Kur
         uses: actions/setup-python@v5
         with:
-          python-version: '3.10'
+          python-version: "3.10"
 
       - name: Gerekli Kütüphaneleri ve Tarayıcıyı Yükle
         run: |
@@ -25,32 +25,58 @@ jobs:
 
       - name: Şifreli Tarayıcı Profilini Çöz (RAR Formatı)
         env:
-          ZIP_PASS: ${{ secrets.ZIP_PASSWORD }} # Kasadaki 510 karakterlik şifreniz
+          ZIP_PASS: ${{ secrets.ZIP_PASSWORD }}
         run: |
-          # 1. Linux sunucusuna RAR dosyalarını açabilmesi için resmi paketi kuruyoruz
           sudo apt-get update && sudo apt-get install -y unrar
-          
-          # 2. Windows kopyalama tuzağına karşı görünmez boşlukları temizle
           CLEAN_PASS=$(echo -n "$ZIP_PASS" | tr -d '\r\n[:space:]')
-          
-          # 3. Teşhis Bilgileri
-          LEN=${#CLEAN_PASS}
-          START_CHARS=$(echo -n "$CLEAN_PASS" | head -c 3)
-          END_CHARS=$(echo -n "$CLEAN_PASS" | tail -c 3)
-          echo ">>> [TEŞHİS] Gelen Şifre Uzunluğu: $LEN karakter."
-          echo ">>> [TEŞHİS] Şifre Başı/Sonu: ${START_CHARS}...${END_CHARS}"
-          
-          # 4. AKSİYON: unrar kullanarak klasör yapısını bozmadan (-e yerine x komutuyla) dışarı çıkar
-          unrar x -p"$CLEAN_PASS" browser_data.rar
+
+          # 4. AKSİYON: browser_data/ klasörüne çıkar (kod bu klasörü bekliyor)
+          mkdir -p browser_data
+          unrar x -p"$CLEAN_PASS" browser_data.rar browser_data/
+
+          # --- TEŞHIS: Profil dizini kontrolü ---
+          echo "=== browser_data/ içeriği ==="
+          if [ -d "browser_data/Default" ]; then
+            echo "✅ browser_data/Default/ klasörü BULUNDU"
+            ls browser_data/Default/ | head -10
+          else
+            echo "❌ browser_data/Default/ YOK! Sorun burada."
+            ls -la browser_data/ | head -20
+          fi
 
       - name: Veri Toplama Botunu Başlat (5 Saat 50 Dakika)
         run: |
           if [ ! -f "dataset.csv" ]; then
             touch dataset.csv
           fi
-          python collector.py &
-          sleep 21000
+
+          # Botu başlat, logları kaydet
+          python collector.py > bot_output.log 2>&1 &
+          BOT_PID=$!
+          echo "Bot PID: $BOT_PID"
+
+          # 5 dakika bekle, ilk logları kontrol et
+          sleep 300
+          echo "=== İLK 5 DAKİKA LOGLARI ==="
+          cat bot_output.log | tail -50
+
+          # Kalan süreyi bekle (21000 - 300 = 20700 saniye)
+          sleep 20700
           pkill -f collector.py || true
+
+          echo "=== SON LOGLAR ==="
+          cat bot_output.log | tail -30
+
+      - name: Debug Dosyalarını Yükle (Teşhis İçin)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: debug-files-${{ github.run_number }}
+          path: |
+            bot_output.log
+            crash.log
+          if-no-files-found: warn
+          retention-days: 3
 
       - name: Toplanan Verileri GitHub Deposuna Kaydet (Commit & Push)
         run: |
