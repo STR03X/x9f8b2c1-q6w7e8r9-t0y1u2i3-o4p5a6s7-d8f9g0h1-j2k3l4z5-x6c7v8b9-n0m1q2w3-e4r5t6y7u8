@@ -1,9 +1,9 @@
 name: 7/24 Kesintisiz Veri Toplayıcı
 
 on:
-  workflow_dispatch: # Manuel başlatma butonu (Actions sekmesindeki mavi buton)
+  workflow_dispatch: # Manuel başlatma butonu
   repository_dispatch:
-    types: [RESTART_BOT] # Botun süre bitiminde kendi kendini otomatik tetikleme bayrağı
+    types: [RESTART_BOT] # Otomatik döngü tetikleyicisi
 
 jobs:
   collect:
@@ -23,55 +23,45 @@ jobs:
           playwright install chromium
           playwright install-deps
 
-      - name: Şifreli Tarayıcı Profilini Çöz ve Klasöre Çıkar
+      - name: Şifreli Tarayıcı Profilini Çöz (RAR Formatı)
         env:
           ZIP_PASS: ${{ secrets.ZIP_PASSWORD }} # Kasadaki 510 karakterlik şifreniz
         run: |
-          # Sunucuya 7-zip paketini kuruyoruz
-          sudo apt-get update && sudo apt-get install -y p7zip-full
+          # 1. Linux sunucusuna RAR dosyalarını açabilmesi için resmi paketi kuruyoruz
+          sudo apt-get update && sudo apt-get install -y unrar
           
-          # 1. TUZAK TEMİZLİĞİ: Windows'tan gelebilecek gizli satır sonu (\r\n) veya boşlukları temizle
+          # 2. Windows kopyalama tuzağına karşı görünmez boşlukları temizle
           CLEAN_PASS=$(echo -n "$ZIP_PASS" | tr -d '\r\n[:space:]')
           
-          # 2. TEŞHİS ADIMI: Şifrenin gerçek uzunluğunu ve uçlarını loga bas (Hata ayıklamak için)
+          # 3. Teşhis Bilgileri
           LEN=${#CLEAN_PASS}
           START_CHARS=$(echo -n "$CLEAN_PASS" | head -c 3)
           END_CHARS=$(echo -n "$CLEAN_PASS" | tail -c 3)
           echo ">>> [TEŞHİS] Gelen Şifre Uzunluğu: $LEN karakter."
           echo ">>> [TEŞHİS] Şifre Başı/Sonu: ${START_CHARS}...${END_CHARS}"
           
-          # 3. AKSİYON: Temizlenmiş şifreyle 1000 karakter sınırına takılmadan zipten çıkar
-          7z x browser_data.zip "-p$CLEAN_PASS" -y -o.
+          # 4. AKSİYON: unrar kullanarak klasör yapısını bozmadan (-e yerine x komutuyla) dışarı çıkar
+          unrar x -p"$CLEAN_PASS" browser_data.rar
 
       - name: Veri Toplama Botunu Başlat (5 Saat 50 Dakika)
         run: |
-          # Eğer daha önce kaydedilmiş bir dataset.csv yoksa boş bir tane oluştur
           if [ ! -f "dataset.csv" ]; then
             touch dataset.csv
           fi
-          
-          # Python botunu arka planda başlatıyoruz
           python collector.py &
-          
-          # 21000 saniye (yani tam 5 saat 50 dakika) boyunca botun veri toplamasını bekliyoruz
           sleep 21000
-          
-          # GitHub Actions'ın 6 saatlik sınırına takılmamak için sürenin sonunda botu güvenli kapatıyoruz
           pkill -f collector.py || true
 
       - name: Toplanan Verileri GitHub Deposuna Kaydet (Commit & Push)
         run: |
           git config --global user.name "GitHub Actions Bot"
           git config --global user.email "actions@github.com"
-          
-          # Sadece toplanan verilerin yazıldığı dataset.csv dosyasını kaydediyoruz
           git add dataset.csv
           git commit -m "Veri seti güncellendi [Otomatik]" || echo "Değişiklik yok"
           git push
 
       - name: Sonraki 6 Saatlik Döngüyü Tetikle (Sonsuz Döngü)
         run: |
-          # GitHub API'sine istek atarak bu workflow'u sonraki 6 saat için yeniden tetikliyoruz
           curl -X POST \
             -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" \
             -H "Accept: application/vnd.github.v3+json" \
