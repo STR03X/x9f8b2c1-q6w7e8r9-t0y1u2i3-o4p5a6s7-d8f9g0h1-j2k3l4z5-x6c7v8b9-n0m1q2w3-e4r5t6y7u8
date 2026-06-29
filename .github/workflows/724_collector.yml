@@ -25,12 +25,12 @@ jobs:
 
       - name: Şifreli Tarayıcı Profilini Çöz ve Klasöre Çıkar
         env:
-          ZIP_PASS: ${{ secrets.ZIP_PASSWORD }}
+          ZIP_PASS: ${{ secrets.ZIP_PASSWORD }} # Kasadaki 510 karakterlik şifre
         run: |
           sudo apt-get update && sudo apt-get install -y p7zip-full
           
-          # Şifreyi çift tırnak yerine tek tırnak kurallarıyla korumaya alıyoruz
-          7z x browser_data.zip '-p'"$ZIP_PASS"'' -y -o.
+          # Şifre parametresini Linux'un en stabil okuyacağı çift tırnaklı standart formatta veriyoruz
+          7z x browser_data.zip "-p$ZIP_PASS" -y -o.
 
       - name: Veri Toplama Botunu Başlat (5 Saat 50 Dakika)
         run: |
