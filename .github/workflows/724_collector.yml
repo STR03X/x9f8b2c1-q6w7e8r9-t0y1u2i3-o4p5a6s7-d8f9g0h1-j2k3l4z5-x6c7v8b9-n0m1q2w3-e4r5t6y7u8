@@ -25,12 +25,23 @@ jobs:
 
       - name: Şifreli Tarayıcı Profilini Çöz ve Klasöre Çıkar
         env:
-          ZIP_PASS: ${{ secrets.ZIP_PASSWORD }} # Kasadaki 510 karakterlik şifre
+          ZIP_PASS: ${{ secrets.ZIP_PASSWORD }} # Kasadaki 510 karakterlik şifreniz
         run: |
+          # Sunucuya 7-zip paketini kuruyoruz
           sudo apt-get update && sudo apt-get install -y p7zip-full
           
-          # Şifre parametresini Linux'un en stabil okuyacağı çift tırnaklı standart formatta veriyoruz
-          7z x browser_data.zip "-p$ZIP_PASS" -y -o.
+          # 1. TUZAK TEMİZLİĞİ: Windows'tan gelebilecek gizli satır sonu (\r\n) veya boşlukları temizle
+          CLEAN_PASS=$(echo -n "$ZIP_PASS" | tr -d '\r\n[:space:]')
+          
+          # 2. TEŞHİS ADIMI: Şifrenin gerçek uzunluğunu ve uçlarını loga bas (Hata ayıklamak için)
+          LEN=${#CLEAN_PASS}
+          START_CHARS=$(echo -n "$CLEAN_PASS" | head -c 3)
+          END_CHARS=$(echo -n "$CLEAN_PASS" | tail -c 3)
+          echo ">>> [TEŞHİS] Gelen Şifre Uzunluğu: $LEN karakter."
+          echo ">>> [TEŞHİS] Şifre Başı/Sonu: ${START_CHARS}...${END_CHARS}"
+          
+          # 3. AKSİYON: Temizlenmiş şifreyle 1000 karakter sınırına takılmadan zipten çıkar
+          7z x browser_data.zip "-p$CLEAN_PASS" -y -o.
 
       - name: Veri Toplama Botunu Başlat (5 Saat 50 Dakika)
         run: |
@@ -39,7 +50,7 @@ jobs:
             touch dataset.csv
           fi
           
-          # Python botunu arka planda (arka planda çalışması için sonuna & koyduk) başlatıyoruz
+          # Python botunu arka planda başlatıyoruz
           python collector.py &
           
           # 21000 saniye (yani tam 5 saat 50 dakika) boyunca botun veri toplamasını bekliyoruz
