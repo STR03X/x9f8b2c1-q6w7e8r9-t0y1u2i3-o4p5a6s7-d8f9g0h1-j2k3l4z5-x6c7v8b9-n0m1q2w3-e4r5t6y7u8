@@ -762,6 +762,8 @@ WARMUP_CANDLE_COUNT = 180
 candle_count = 0
 
 last_tick_price = 0.0
+last_tick_time = time.time()
+active_page = None
 is_running = True
 
 def update_cli_stats(last_price=0.0):
@@ -832,6 +834,12 @@ def check_and_save_pending(current_price):
     now = time.time()
     for row in list(pending_rows):
         if now >= row["target_timestamp"]:
+            # Vade asimi kontrolü (10 saniyeden fazla geciken veriler gürültü yapmamak için kaydedilmez)
+            if now - row["target_timestamp"] > 10:
+                logger.warning(f"[STALE] Vade gecikmesi toleransi asildi! Vade: {datetime.fromtimestamp(row['target_timestamp']).strftime('%H:%M:%S')} | Gecikme: {now - row['target_timestamp']:.1f}s | Kaydedilmeden temizleniyor.")
+                pending_rows.remove(row)
+                continue
+
             price_change = current_price - row["close"]
             if price_change > 0:
                 pnl_result = 1
@@ -980,6 +988,9 @@ def handle_as_message(payload):
 
                     ticks.append({"rate": rate, "ask": ask or rate, "bid": bid or rate, "ts": ts})
                     update_cli_stats(rate)
+                    check_and_save_pending(rate)
+                    global last_tick_time
+                    last_tick_time = time.time()
 
 def trigger_ui_update():
     """Placeholder for UI refresh; called when shared state (sentiment, range, smart money) changes."""
@@ -1049,6 +1060,21 @@ async def status_reporter():
         await asyncio.sleep(10)
         sentiment_str = f"CALL {current_sentiment['call']}% | PUT {current_sentiment['put']}%"
         logger.info(f"[DURUM] Kaydedilecek Mumlar: {total_saved_count} | Fiyat: {last_tick_price:.8f} | Bekleyen: {len(pending_rows)} | Egilim: {sentiment_str}")
+
+async def watchdog_task():
+    global last_tick_time, active_page
+    last_tick_time = time.time()
+    while is_running:
+        await asyncio.sleep(15)
+        if time.time() - last_tick_time > 60:
+            logger.warning("[WATCHDOG] 60 saniyedir yeni tick gelmedi! Tarayici donmus veya baglanti kopmus olabilir. Sayfa yenileniyor...")
+            last_tick_time = time.time()
+            if active_page:
+                try:
+                    await active_page.reload(wait_until="domcontentloaded", timeout=60000)
+                    logger.info("[WATCHDOG] Sayfa basariyla yenilendi.")
+                except Exception as e:
+                    logger.error(f"[WATCHDOG HATA] Sayfa yenilenirken hata olustu: {e}")
 
 def attach_ws_listeners(ws):
     url = ws.url
@@ -1124,6 +1150,9 @@ async def run_collector():
 
         page = context.pages[0] if context.pages else await context.new_page()
 
+        global active_page
+        active_page = page
+
         logger.info(">>> Binomo platformu arka planda yukleniyor...")
         try:
             await page.goto(BINOMO_URL, wait_until="domcontentloaded", timeout=60000)
@@ -1145,6 +1174,7 @@ async def run_collector():
         logger.info(">>> WebSocket akisi dinleniyor. Veri toplama aktif! [OK]")
 
         asyncio.create_task(status_reporter())
+        asyncio.create_task(watchdog_task())
 
         try:
             while is_running:
