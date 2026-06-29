@@ -25,10 +25,13 @@ jobs:
 
       - name: Şifreli Tarayıcı Profilini Çöz ve Klasöre Çıkar
         env:
-          ZIP_PASS: ${{ secrets.ZIP_PASSWORD }} # GitHub Secrets kasasındaki 1000 karakterli şifreniz
+          ZIP_PASS: ${{ secrets.ZIP_PASSWORD }}
         run: |
-          # Kasadaki devasa şifreyi kullanarak şifreli zip dosyasını arka planda açıyoruz
-          unzip -P "$ZIP_PASS" -o browser_data.zip -d .
+          # Önce sunucuya 7-zip paketini kuruyoruz
+          sudo apt-get update && sudo apt-get install -y p7zip-full
+          
+          # 1000 karakter sınırına takılmadan kurşun geçirmez şekilde açıyoruz
+          7z x browser_data.zip -p"$ZIP_PASS" -y -o.
 
       - name: Veri Toplama Botunu Başlat (5 Saat 50 Dakika)
         run: |
