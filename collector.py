@@ -346,8 +346,9 @@ def calc_macd(prices):
         return None, None
     macd_series = []
     for i in range(26, len(prices) + 1):
-        e12 = calc_ema(prices[i - 26:i], 12)
-        e26 = calc_ema(prices[i - 26:i], 26)
+        # Doğru MACD: her iki EMA da tüm geçmiş fiyat dizisinden hesaplanmalı
+        e12 = calc_ema(prices[:i], 12)
+        e26 = calc_ema(prices[:i], 26)
         if e12 is not None and e26 is not None:
             macd_series.append(e12 - e26)
     if len(macd_series) < 9:
@@ -362,7 +363,8 @@ def calc_bollinger(prices, period=20):
         return None, None, None
     subset = prices[-period:]
     sma = sum(subset) / period
-    std = (sum((x - sma) ** 2 for x in subset) / (period - 1)) ** 0.5
+    # TradingView uyumlu: nüfus (population) standart sapması kullanılır (bölen: period)
+    std = (sum((x - sma) ** 2 for x in subset) / period) ** 0.5
     return sma, sma + 2 * std, sma - 2 * std
 
 def calc_momentum(prices, period=10):
@@ -381,6 +383,11 @@ def calc_parabolic_sar(highs, lows, af_start=0.02, af_max=0.2, af_step=0.02):
         prev_sar = sar[-1]
         if bull:
             current_sar = prev_sar + af * (ep - prev_sar)
+            # Standart SAR kuralı: bull modda SAR, önceki iki mumun low'undan küçük olmalı
+            if i >= 2:
+                current_sar = min(current_sar, lows[i - 1], lows[i - 2])
+            elif i == 1:
+                current_sar = min(current_sar, lows[i - 1])
             if lows[i] < current_sar:
                 bull = False
                 current_sar = ep
@@ -392,6 +399,11 @@ def calc_parabolic_sar(highs, lows, af_start=0.02, af_max=0.2, af_step=0.02):
                     af = min(af_max, af + af_step)
         else:
             current_sar = prev_sar + af * (ep - prev_sar)
+            # Standart SAR kuralı: bear modda SAR, önceki iki mumun high'ından büyük olmalı
+            if i >= 2:
+                current_sar = max(current_sar, highs[i - 1], highs[i - 2])
+            elif i == 1:
+                current_sar = max(current_sar, highs[i - 1])
             if highs[i] > current_sar:
                 bull = True
                 current_sar = ep
@@ -425,8 +437,12 @@ def calc_atr(candles_list, period=14):
             continue
     if not trs:
         return None
+    # Wilder'ın üstel yumuşatması (RMA) — basit ortalama yerine
     actual_period = min(period, len(trs))
-    return sum(trs[-actual_period:]) / actual_period
+    atr = sum(trs[:actual_period]) / actual_period
+    for tr in trs[actual_period:]:
+        atr = (atr * (actual_period - 1) + tr) / actual_period
+    return atr
 
 def detect_patterns(candles_list):
     if len(candles_list) < 3:
@@ -559,7 +575,7 @@ def analyze_timeframe(candle_list) -> dict | None:
     ema21 = calc_ema(closes, 21)
     rsi = calc_rsi(closes, 14)
     ema_signal = "YATAY"
-    if ema9 and ema21:
+    if ema9 is not None and ema21 is not None:
         ema_signal = "UP" if ema9 > ema21 else "DOWN"
     last_candle = clist[-1]
     color = "GREEN" if last_candle["close"] >= last_candle["open"] else "RED"
@@ -595,7 +611,7 @@ def analyze_candles() -> dict | None:
     avg_spread = sum(spreads) / len(spreads) if spreads else 0.0
 
     ema_signal = "YATAY"
-    if ema9 and ema21:
+    if ema9 is not None and ema21 is not None:
         ema_signal = "UP" if ema9 > ema21 else "DOWN"
 
     bb_pos = "LOWER_HALF"
@@ -624,9 +640,11 @@ def analyze_candles() -> dict | None:
             obv_prev += c.get("tick_count", 0)
         else:
             obv_prev -= c.get("tick_count", 0)
-    if obv_proxy > obv_prev * 1.05:
+    # Son 3 mumun net OBV katkısını karşılaştır (negatif obv_prev ile çarpma yön tersine çevirirdi)
+    last_3_obv = obv_proxy - obv_prev
+    if last_3_obv > 0:
         obv_trend = "UP"
-    elif obv_proxy < obv_prev * 0.95:
+    elif last_3_obv < 0:
         obv_trend = "DOWN"
     else:
         obv_trend = "FLAT"
@@ -686,9 +704,9 @@ def analyze_candles() -> dict | None:
     # Calculate EMA deviations (%)
     ema9_dev = 0.0
     ema21_dev = 0.0
-    if ema9 and ema9 != 0:
+    if ema9 is not None and ema9 != 0:
         ema9_dev = round(((price - ema9) / ema9) * 100, 6)
-    if ema21 and ema21 != 0:
+    if ema21 is not None and ema21 != 0:
         ema21_dev = round(((price - ema21) / ema21) * 100, 6)
 
     # Calculate Volatility Ratio (ATR 14 / ATR 50)
