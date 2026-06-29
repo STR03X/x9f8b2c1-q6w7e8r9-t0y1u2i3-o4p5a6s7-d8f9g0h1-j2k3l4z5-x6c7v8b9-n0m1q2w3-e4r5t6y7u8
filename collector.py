@@ -20,12 +20,15 @@ colorama.init()
 # We keep log messages in a deque to render them inside our CLI UI
 recent_logs = deque(maxlen=8)
 
+RUNNING_IN_CI = True
+
 class CLILogHandler(logging.Handler):
     def emit(self, record):
         try:
             msg = self.format(record)
             recent_logs.append(msg)
-            trigger_ui_update()
+            if not RUNNING_IN_CI:
+                trigger_ui_update()
         except Exception:
             pass
 
@@ -34,10 +37,17 @@ crash_handler = logging.FileHandler("crash.log", encoding="utf-8")
 crash_handler.setLevel(logging.WARNING)
 crash_handler.setFormatter(logging.Formatter("%(asctime)s [%(levelname)s] %(message)s"))
 
+handlers = [crash_handler]
+if RUNNING_IN_CI:
+    stdout_handler = logging.StreamHandler(sys.stdout)
+    stdout_handler.setLevel(logging.INFO)
+    stdout_handler.setFormatter(logging.Formatter("%(asctime)s [%(levelname)s] %(message)s"))
+    handlers.append(stdout_handler)
+
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [%(levelname)s] %(message)s",
-    handlers=[crash_handler]
+    handlers=handlers
 )
 logger = logging.getLogger("Collector")
 
@@ -114,7 +124,7 @@ def init_csv():
         with open(CSV_PATH, "w", newline="", encoding="utf-8") as f:
             writer = csv.writer(f)
             writer.writerow(CSV_HEADERS)
-        logger.info(f"[CSV] {CSV_PATH} başarıyla oluşturuldu ve başlıklar yazıldı.")
+        logger.info(f"[CSV] {CSV_PATH} basariyla olusturuldu ve basliklar yazildi.")
 
 init_csv()
 
@@ -848,6 +858,8 @@ def format_log_line(log_line):
     return f"{Fore.WHITE}{log_line}{Style.RESET_ALL}"
 
 def draw_dashboard():
+    if RUNNING_IN_CI:
+        return
     global last_ui_update_time, ui_needs_update, collector_status, last_tick_price, gradient_phase, confirming_exit
     now = time.time()
     # Throttled to ~15-20 FPS for smooth transitions
@@ -1051,7 +1063,7 @@ def check_and_save_pending(current_price):
             save_row_to_csv(row, int(row["target_timestamp"]), current_price, price_change, pnl_result)
             pending_rows.remove(row)
             update_cli_stats(current_price)
-            logger.info(f"[KAYDEDİLDİ] Vade: {datetime.fromtimestamp(row['target_timestamp']).strftime('%H:%M:%S')} │ Entry: {row['close']:.5f} ──> Exit: {current_price:.5f} │ Sonuç: {pnl_result}")
+            logger.info(f"[KAYDEDILDILER] Toplam: {total_saved_count} | Vade: {datetime.fromtimestamp(row['target_timestamp']).strftime('%H:%M:%S')} | Entry: {row['close']:.5f} -> Exit: {current_price:.5f} | Sonuc: {pnl_result}")
 
 def add_to_pending(analysis_data):
     try:
@@ -1068,7 +1080,7 @@ def add_to_pending(analysis_data):
     analysis_data["target_timestamp"] = target_timestamp
     pending_rows.append(analysis_data)
     update_cli_stats(analysis_data["close"])
-    logger.info(f"[TAKİP] Mum: {datetime.fromtimestamp(ts).strftime('%H:%M:%S')} ──> Vade: {datetime.fromtimestamp(target_timestamp).strftime('%H:%M:%S')} ({target_seconds_in_future}s)")
+    logger.info(f"[TAKIP] Mum: {datetime.fromtimestamp(ts).strftime('%H:%M:%S')} -> Vade: {datetime.fromtimestamp(target_timestamp).strftime('%H:%M:%S')} ({target_seconds_in_future}s)")
 
 # ── Mum Oluşturucu ────────────────────────────────────────────────────────────
 
@@ -1239,9 +1251,15 @@ def handle_ws_message(payload):
         except Exception as e:
             logger.debug(f"[SOCIAL TRADING PARSE] {e}")
 
+async def status_reporter():
+    while is_running:
+        await asyncio.sleep(10)
+        sentiment_str = f"CALL {current_sentiment['call']}% | PUT {current_sentiment['put']}%"
+        logger.info(f"[DURUM] Kaydedilen Mumlar: {total_saved_count} | Fiyat: {last_tick_price:.5f} | Bekleyen: {len(pending_rows)} | Egilim: {sentiment_str}")
+
 def attach_ws_listeners(ws):
     url = ws.url
-    logger.info(f"[WS BAĞLANDI] {url}")
+    logger.info(f"[WS BAGLANDI] {url}")
     if "as.binomo.com" in url:
         ws.on("framereceived", lambda p: handle_as_message(p))
     else:
@@ -1270,14 +1288,17 @@ async def run_collector():
 
         page = context.pages[0] if context.pages else await context.new_page()
 
-        logger.info(">>> Binomo platformu arka planda yükleniyor…")
-        collector_status = "PLATFORM YÜKLENİYOR"
+        logger.info(">>> Binomo platformu arka planda yukleniyor...")
+        collector_status = "PLATFORM YUKLENIYOR"
         trigger_ui_update()
 
         await page.goto(BINOMO_URL, wait_until="domcontentloaded")
-        logger.info(">>> WebSocket akışı dinleniyor. Veri toplama aktif! ✓")
-        collector_status = "BAĞLANTI AKTİF"
+        logger.info(">>> WebSocket akisi dinleniyor. Veri toplama aktif! [OK]")
+        collector_status = "BAGLANTI AKTIF"
         trigger_ui_update()
+
+        if RUNNING_IN_CI:
+            asyncio.create_task(status_reporter())
 
         try:
             while is_running:
@@ -1286,8 +1307,8 @@ async def run_collector():
                 if ui_needs_update:
                     draw_dashboard()
         except Exception as e:
-            logger.error(f"[COLLECTOR HATA] Arka plan döngüsü koptu: {e}")
-            collector_status = "BAĞLANTI KESİLDİ"
+            logger.error(f"[COLLECTOR HATA] Arka plan dongusu koptu: {e}")
+            collector_status = "BAGLANTI KESILDI"
             trigger_ui_update()
             draw_dashboard()
         finally:
@@ -1345,13 +1366,16 @@ def ui_refresh_loop():
 
 def main():
     global is_running
-    # Clear console once at startup to prepare clean drawing surface
-    sys.stdout.write("\033[2J\033[H")
-    sys.stdout.flush()
+    if not RUNNING_IN_CI:
+        # Clear console once at startup to prepare clean drawing surface
+        sys.stdout.write("\033[2J\033[H")
+        sys.stdout.flush()
 
-    # Start UI refreshing thread
-    t_ui = threading.Thread(target=ui_refresh_loop, daemon=True)
-    t_ui.start()
+        # Start UI refreshing thread
+        t_ui = threading.Thread(target=ui_refresh_loop, daemon=True)
+        t_ui.start()
+    else:
+        logger.info("CI/CD (GitHub Actions) ortami algilandi. CLI Dashboard ve terminal animasyonlari devre disi birakildi, standart loglama aktif.")
     
     # Run collector main loop
     try:
@@ -1362,9 +1386,10 @@ def main():
         logger.error(f"Kritik Hata: {e}")
     finally:
         is_running = False
-        # Clear screen and exit cleanly
-        sys.stdout.write("\033[H\033[2J")
-        print("Uygulama kapatıldı.")
+        if not RUNNING_IN_CI:
+            # Clear screen and exit cleanly
+            sys.stdout.write("\033[H\033[2J")
+        print("Uygulama kapatildi.")
         sys.exit(0)
 
 if __name__ == "__main__":
