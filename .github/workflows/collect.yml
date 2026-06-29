@@ -23,26 +23,12 @@ jobs:
           playwright install chromium
           playwright install-deps
 
-      - name: Şifreli Tarayıcı Profilini Çöz (RAR Formatı)
+      - name: auth.json Dosyasini Olustur (Giris Cerezleri)
         env:
-          ZIP_PASS: ${{ secrets.ZIP_PASSWORD }}
+          AUTH_JSON_DATA: ${{ secrets.BINOMO_AUTH_JSON }}
         run: |
-          sudo apt-get update && sudo apt-get install -y unrar
-          CLEAN_PASS=$(echo -n "$ZIP_PASS" | tr -d '\r\n[:space:]')
-
-          # 4. AKSİYON: browser_data/ klasörüne çıkar (kod bu klasörü bekliyor)
           mkdir -p browser_data
-          unrar x -p"$CLEAN_PASS" browser_data.rar browser_data/
-
-          # --- TEŞHIS: Profil dizini kontrolü ---
-          echo "=== browser_data/ içeriği ==="
-          if [ -d "browser_data/Default" ]; then
-            echo "✅ browser_data/Default/ klasörü BULUNDU"
-            ls browser_data/Default/ | head -10
-          else
-            echo "❌ browser_data/Default/ YOK! Sorun burada."
-            ls -la browser_data/ | head -20
-          fi
+          echo "$AUTH_JSON_DATA" > auth.json
 
       - name: Veri Toplama Botunu Başlat (5 Saat 50 Dakika)
         run: |
