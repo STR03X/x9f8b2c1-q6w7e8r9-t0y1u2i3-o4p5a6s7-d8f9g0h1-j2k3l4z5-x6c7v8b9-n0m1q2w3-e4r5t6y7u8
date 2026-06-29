@@ -28,7 +28,7 @@ logger = logging.getLogger("Collector")
 
 # ── Ayarlar ───────────────────────────────────────────────────────────────────
 BROWSER_DATA_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "browser_data")
-BINOMO_URL = "https://binomo.com"
+BINOMO_URL = "https://binomo.com/trading"
 CANDLE_SECONDS = 5
 WINDOW_SIZE = 60
 MIN_TICKS = 5
@@ -574,7 +574,8 @@ def analyze_candles() -> dict | None:
     price = closes[-1]
 
     pattern = detect_patterns(clist)
-    sup, res = get_support_resistance(clist)
+    atr_val = atr if (atr is not None and atr > 0) else 0.0000001
+    sup, res = get_support_resistance(clist, tolerance=(atr_val / price))
     htf_trend = get_higher_timeframe_trend(clist, 5)
     sent_mom = calculate_sentiment_momentum()
 
@@ -639,9 +640,9 @@ def analyze_candles() -> dict | None:
     price_diff_t1 = 0.0
     price_diff_t2 = 0.0
     if len(closes) > 1 and closes[-2] != 0:
-        price_diff_t1 = round(((closes[-1] - closes[-2]) / closes[-2]) * 100, 6)
+        price_diff_t1 = round(((closes[-1] - closes[-2]) / closes[-2]) * 100, 12)
     if len(closes) > 2 and closes[-3] != 0:
-        price_diff_t2 = round(((closes[-1] - closes[-3]) / closes[-3]) * 100, 6)
+        price_diff_t2 = round(((closes[-1] - closes[-3]) / closes[-3]) * 100, 12)
 
     # Calculate RSI differences (5s and 10s change in RSI)
     rsi_diff_t1 = 0.0
@@ -660,7 +661,7 @@ def analyze_candles() -> dict | None:
     if len(closes) > 1:
         _, prev_macd_h = calc_macd(closes[:-1])
         if macd_h is not None and prev_macd_h is not None:
-            macd_hist_slope = round(macd_h - prev_macd_h, 8)
+            macd_hist_slope = round(macd_h - prev_macd_h, 12)
 
     # Calculate Stochastic difference (K - D)
     stoch_diff = round(stoch_k - stoch_d, 4) if (stoch_k is not None and stoch_d is not None) else 0.0
@@ -676,9 +677,9 @@ def analyze_candles() -> dict | None:
     ema9_dev = 0.0
     ema21_dev = 0.0
     if ema9 is not None and ema9 != 0:
-        ema9_dev = round(((price - ema9) / ema9) * 100, 6)
+        ema9_dev = round(((price - ema9) / ema9) * 100, 12)
     if ema21 is not None and ema21 != 0:
-        ema21_dev = round(((price - ema21) / ema21) * 100, 6)
+        ema21_dev = round(((price - ema21) / ema21) * 100, 12)
 
     # Calculate Volatility Ratio (ATR 14 / ATR 50)
     volatility_ratio = 1.0
@@ -700,19 +701,19 @@ def analyze_candles() -> dict | None:
     return {
         "timestamp": clist[-1]["time"],
         "close": price,
-        "rsi": round(rsi, 2) if rsi else 50.0,
-        "macd_line": round(macd_v, 8) if macd_v else 0.0,
-        "macd_hist": round(macd_h, 8) if macd_h else 0.0,
-        "stoch_k": round(stoch_k, 2) if stoch_k else 50.0,
-        "stoch_d": round(stoch_d, 2) if stoch_d else 50.0,
-        "ema9": round(ema9, 8) if ema9 else price,
-        "ema21": round(ema21, 8) if ema21 else price,
+        "rsi": round(rsi, 2) if rsi is not None else 50.0,
+        "macd_line": round(macd_v, 12) if macd_v is not None else 0.0,
+        "macd_hist": round(macd_h, 12) if macd_h is not None else 0.0,
+        "stoch_k": round(stoch_k, 2) if stoch_k is not None else 50.0,
+        "stoch_d": round(stoch_d, 2) if stoch_d is not None else 50.0,
+        "ema9": round(ema9, 12) if ema9 else price,
+        "ema21": round(ema21, 12) if ema21 else price,
         "ema_signal": ema_signal,
-        "bollinger_width": round(calc_bollinger_width(closes, 20) or 0.0, 6),
+        "bollinger_width": calc_bollinger_width(closes, 20) or 0.0,
         "bollinger_position": bb_pos,
         "bollinger_squeeze": 1 if detect_bollinger_squeeze(closes, 20, 40) else 0,
-        "sar": round(sar, 8) if sar else price,
-        "atr": round(atr, 8) if atr else 0.0,
+        "sar": round(sar, 12) if sar else price,
+        "atr": round(atr, 12) if atr else 0.0,
         "vol_score": vol_score,
         "obv_trend": obv_trend,
         "sentiment_call": current_sentiment["call"],
@@ -755,6 +756,10 @@ if os.path.exists(CSV_PATH):
             total_saved_count = sum(1 for _ in f) - 1  # Başlığı saymıyoruz
     except Exception:
         total_saved_count = 0
+
+# ── Isınma Sayacı (ilk 180 mum CSV'ye yazılmaz) ───────────────────────────────
+WARMUP_CANDLE_COUNT = 180
+candle_count = 0
 
 last_tick_price = 0.0
 is_running = True
@@ -828,17 +833,16 @@ def check_and_save_pending(current_price):
     for row in list(pending_rows):
         if now >= row["target_timestamp"]:
             price_change = current_price - row["close"]
-            tolerance = row["close"] * YATAY_TOLERANCE_PCT
-            if price_change > tolerance:
+            if price_change > 0:
                 pnl_result = 1
-            elif price_change < -tolerance:
+            elif price_change < 0:
                 pnl_result = 0
             else:
                 pnl_result = 2
             save_row_to_csv(row, int(row["target_timestamp"]), current_price, price_change, pnl_result)
             pending_rows.remove(row)
             update_cli_stats(current_price)
-            logger.info(f"[KAYDEDILDILER] Toplam: {total_saved_count} | Vade: {datetime.fromtimestamp(row['target_timestamp']).strftime('%H:%M:%S')} | Entry: {row['close']:.5f} -> Exit: {current_price:.5f} | Sonuc: {pnl_result}")
+            logger.info(f"[KAYDETME] Toplam: {total_saved_count} | Vade: {datetime.fromtimestamp(row['target_timestamp']).strftime('%H:%M:%S')} | Entry: {row['close']:.8f} -> Exit: {current_price:.8f} | Sonuc: {pnl_result}")
 
 def add_to_pending(analysis_data):
     try:
@@ -846,8 +850,7 @@ def add_to_pending(analysis_data):
     except Exception:
         ts = int(time.time())
     second_of_minute = ts % 60
-    expected_entry_second = second_of_minute + 10 # 10s Gemini gecikmesi simülasyonu
-    if expected_entry_second < 30:
+    if second_of_minute < 30:
         target_seconds_in_future = 60 - second_of_minute
     else:
         target_seconds_in_future = 120 - second_of_minute
@@ -870,7 +873,7 @@ def close_candle():
     spreads = [t["ask"] - t["bid"] for t in ticks]
 
     candle = {
-        "time": current_minute,
+        "time": int(current_minute),  # Her zaman int olarak sakla
         "open": rates[0],
         "high": max(rates),
         "low": min(rates),
@@ -929,6 +932,11 @@ def close_candle():
 
     result = analyze_candles()
     if result:
+        global candle_count
+        candle_count += 1
+        if candle_count <= WARMUP_CANDLE_COUNT:
+            logger.info(f"[ISINMA] {candle_count}/{WARMUP_CANDLE_COUNT} mum - indikatörler olgunlaşıyor, CSV'ye yazılmıyor.")
+            return
         add_to_pending(result)
         check_and_save_pending(candle["close"])
 
@@ -942,8 +950,11 @@ def get_candle_key(dt):
 def handle_as_message(payload):
     global current_minute, ticks
     try:
+        if isinstance(payload, bytes):
+            payload = payload.decode("utf-8")
         data = json.loads(payload) if isinstance(payload, str) else payload
-    except Exception:
+    except Exception as e:
+        logger.error(f"[AS WS PARSE HATA] {e}")
         return
     if isinstance(data, dict) and data.get("success"):
         for item in data.get("data", []):
@@ -978,8 +989,11 @@ def handle_ws_message(payload):
     global current_sentiment, current_std, current_radius, current_range_coeff
     global current_smart_money, session_start_time, session_range_coefficient
     try:
+        if isinstance(payload, bytes):
+            payload = payload.decode("utf-8")
         data = json.loads(payload) if isinstance(payload, str) else payload
-    except Exception:
+    except Exception as e:
+        logger.error(f"[GENEL WS PARSE HATA] {e}")
         return
     if not isinstance(data, dict):
         return
@@ -1034,7 +1048,7 @@ async def status_reporter():
     while is_running:
         await asyncio.sleep(10)
         sentiment_str = f"CALL {current_sentiment['call']}% | PUT {current_sentiment['put']}%"
-        logger.info(f"[DURUM] Kaydedilecek Mumlar: {total_saved_count} | Fiyat: {last_tick_price:.5f} | Bekleyen: {len(pending_rows)} | Egilim: {sentiment_str}")
+        logger.info(f"[DURUM] Kaydedilecek Mumlar: {total_saved_count} | Fiyat: {last_tick_price:.8f} | Bekleyen: {len(pending_rows)} | Egilim: {sentiment_str}")
 
 def attach_ws_listeners(ws):
     url = ws.url
