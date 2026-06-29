@@ -1296,28 +1296,46 @@ async def run_collector():
 # ── UI Refresh Loop for Console (Falls updates are too slow/dormant) ──────────
 def ui_refresh_loop():
     global gradient_phase, is_running, confirming_exit
-    import msvcrt
+    import select
+    import termios
+    import tty
+
+    def get_key_linux():
+        if not sys.stdin.isatty():
+            return None
+        fd = sys.stdin.fileno()
+        old_settings = termios.tcgetattr(fd)
+        try:
+            tty.setraw(fd)
+            rlist, _, _ = select.select([sys.stdin], [], [], 0.0)
+            if rlist:
+                return sys.stdin.read(1)
+        except Exception:
+            pass
+        finally:
+            try:
+                termios.tcsetattr(fd, termios.TCSADRAIN, old_settings)
+            except Exception:
+                pass
+        return None
+
     # Keep dashboard responsive and animate gradient
     while is_running:
         gradient_phase += 0.02
         draw_dashboard()
         
-        # Check for keyboard inputs on Windows (q or Esc key to close)
-        if msvcrt.kbhit():
-            key = msvcrt.getch()
-            try:
-                key_str = key.decode('utf-8', errors='ignore').lower()
-            except Exception:
-                key_str = ""
-                
+        # Check for keyboard inputs on Linux
+        key_str = get_key_linux()
+        if key_str:
+            key_str = key_str.lower()
             if confirming_exit:
                 if key_str == 'e' or key_str == 'y':
                     is_running = False
-                elif key_str == 'h' or key_str == 'n' or key == b'\x1b':
+                elif key_str == 'h' or key_str == 'n' or key_str == '\x1b':
                     confirming_exit = False
                     trigger_ui_update()
             else:
-                if key_str == 'q' or key == b'\x1b':  # 'q' or Esc key (ASCII 27)
+                if key_str == 'q' or key_str == '\x1b':  # 'q' or Esc key
                     confirming_exit = True
                     trigger_ui_update()
                 
