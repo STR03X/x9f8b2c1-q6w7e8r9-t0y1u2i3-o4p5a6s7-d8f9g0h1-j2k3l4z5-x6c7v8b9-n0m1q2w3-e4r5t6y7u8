@@ -11,7 +11,7 @@ from typing import Any
 from playwright.async_api import async_playwright
 
 # ── Logging Ayarları ──────────────────────────────────────────────────────────
-crash_handler = logging.FileHandler("crash.log", encoding="utf-8")
+crash_handler = logging.FileHandler("crash.log", encoding="utf-8", delay=True)
 crash_handler.setLevel(logging.WARNING)
 crash_handler.setFormatter(logging.Formatter("%(asctime)s [%(levelname)s] %(message)s"))
 
@@ -27,12 +27,11 @@ logging.basicConfig(
 logger = logging.getLogger("Collector")
 
 # ── Ayarlar ───────────────────────────────────────────────────────────────────
-BROWSER_DATA_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "browser_data")
 BINOMO_URL = "https://binomo.com/trading"
 CANDLE_SECONDS = 5
 WINDOW_SIZE = 60
 MIN_TICKS = 5
-YATAY_TOLERANCE_PCT = 0.0001  # %0.01 tolerans aralığı altındaki değişimler YATAY kabul edilir.
+YATAY_TOLERANCE_PCT = 0.0  # Mikroskobik değişimleri yakalamak için tolerans sıfırlandı.
 
 
 # ── Veri Depoları ─────────────────────────────────────────────────────────────
@@ -61,6 +60,7 @@ current_smart_money = {
     "timestamp": None
 }
 session_start_time = None
+restart_browser = False  # Watchdog tarafından set edilir → run_collector tarayıcıyı yeniden başlatır
 session_range_coefficient = 1.0
 
 # ── Etiketleme Deposu ─────────────────────────────────────────────────────────
@@ -189,29 +189,47 @@ def detect_bollinger_squeeze(prices, period=20, window_len=40):
     return current_width <= threshold
 
 def detect_market_regime(candles_1m_list, range_coeff) -> str:
+    """
+    Piyasa rejimini ADX + adaptive Bollinger Width ile tespit eder.
+    NOT: range_coeff Binomo WS'ten her zaman '2.20' sabit geliyor,
+    bu yuzden skorlamadan cikarildi — sabit deger ML'e bilgi vermez.
+    """
     if len(candles_1m_list) < 30:
-        if range_coeff > 2.0:
-            return "GÜÇLÜ_TREND"
-        return "YATAY_PİYASA"
+        return "YATAY_PIYASA"  # Yeterli veri yok, tahmin yapma
     adx = calc_adx(list(candles_1m_list), 14)
     closes = [c["close"] for c in candles_1m_list]
     bb_width = calc_bollinger_width(closes, 20)
     score = 0
+
+    # ADX skoru (degismedi)
     if adx is not None:
         if adx > 25:
             score += 2
         elif adx < 20:
             score -= 1
-    if range_coeff > 2.0:
-        score += 2
-    elif range_coeff < 1.4:
-        score -= 1
+
+    # Adaptive BB Width: son 30 mum icerisindeki genisliklerin percentile'i
+    # Sabit esik (0.0015) bu varligin olceginde hic tetiklenmiyordu.
+    # Simdiki bb_width > son 30 mumdaki medyanin %120'si ise trend genisliyor.
     if bb_width is not None:
-        if bb_width > 0.0015:
-            score += 1
+        n = len(closes)
+        recent_widths = [
+            calc_bollinger_width(closes[:i], 20)
+            for i in range(max(20, n - 30), n + 1)
+        ]
+        recent_widths = [w for w in recent_widths if w is not None]
+        if len(recent_widths) >= 5:
+            sorted_w = sorted(recent_widths)
+            p80 = sorted_w[int(len(sorted_w) * 0.8)]   # Geniş bant eşiği
+            p20 = sorted_w[max(0, int(len(sorted_w) * 0.2))]  # Dar bant eşiği
+            if bb_width >= p80:      # Bant genisliyor → trend var
+                score += 2
+            elif bb_width <= p20:   # Bant sikisor → yatay
+                score -= 1
+
     if score >= 2:
-        return "GÜÇLÜ_TREND"
-    return "YATAY_PİYASA"
+        return "GUCLU_TREND"
+    return "YATAY_PIYASA"
 
 def calc_fibonacci_status(candles_1m_list, current_price) -> dict:
     clist = list(candles_1m_list)
@@ -706,13 +724,15 @@ def analyze_candles() -> dict | None:
         "macd_hist": round(macd_h, 12) if macd_h is not None else 0.0,
         "stoch_k": round(stoch_k, 2) if stoch_k is not None else 50.0,
         "stoch_d": round(stoch_d, 2) if stoch_d is not None else 50.0,
-        "ema9": round(ema9, 12) if ema9 else price,
-        "ema21": round(ema21, 12) if ema21 else price,
+        "ema9": round(ema9, 12) if ema9 is not None else price,
+        "ema21": round(ema21, 12) if ema21 is not None else price,
         "ema_signal": ema_signal,
-        "bollinger_width": calc_bollinger_width(closes, 20) or 0.0,
+        # bollinger_width: ham deger cok kucuk (6.6E-10 gibi), 1e12 ile olcekle
+        # ML icin 0.66 gibi okunakli deger → orijinal semantigi korunur (width / 1e12 = gercek deger)
+        "bollinger_width": round((calc_bollinger_width(closes, 20) or 0.0) * 1e12, 6),
         "bollinger_position": bb_pos,
         "bollinger_squeeze": 1 if detect_bollinger_squeeze(closes, 20, 40) else 0,
-        "sar": round(sar, 12) if sar else price,
+        "sar": round(sar, 12) if sar is not None else price,
         "atr": round(atr, 12) if atr else 0.0,
         "vol_score": vol_score,
         "obv_trend": obv_trend,
@@ -729,7 +749,10 @@ def analyze_candles() -> dict | None:
         "smart_money_trend": current_smart_money.get("trend") or "neutral",
         "smart_money_bet": current_smart_money.get("bet_amount", 0),
         "smart_money_strength": calculate_smart_money_strength(),
-        "bid_ask_imbalance": round((avg_spread / price) * 1_000_000 if price else 0.0, 2),
+        # bid_ask_imbalance: spread ~3E-8, price ~641
+        # 1e6 carpani ile deger 0.00003 → yuvarlama sonucu 0.00 gorünuyordu
+        # 1e9 ile: ~0.03 ile 0.08 arasi okunakli degerler
+        "bid_ask_imbalance": round((avg_spread / price) * 1_000_000_000 if price else 0.0, 4),
         "hour_of_day": hour_of_day,
         "day_of_week": day_of_week,
         "price_diff_t1": price_diff_t1,
@@ -846,7 +869,16 @@ def check_and_save_pending(current_price):
             elif price_change < 0:
                 pnl_result = 0
             else:
-                pnl_result = 2
+                # Beraberlik: entry == exit (float tam esitlik)
+                # Bu varlikta fiyat 1E-8 adimlarla hareket ediyor;
+                # tam esitlik = o an hic hareket olmadi demek.
+                # Binary classification icin anlamsiz label → kaydetme, atla.
+                logger.warning(
+                    f"[BERABERLIK] Entry={row['close']:.11f} == Exit={current_price:.11f} "
+                    f"| Kaydedilmeden atlaniyor."
+                )
+                pending_rows.remove(row)
+                continue
             save_row_to_csv(row, int(row["target_timestamp"]), current_price, price_change, pnl_result)
             pending_rows.remove(row)
             update_cli_stats(current_price)
@@ -971,14 +1003,18 @@ def handle_as_message(payload):
                     rate = asset.get("rate")
                     ask = asset.get("ask")
                     bid = asset.get("bid")
-                    ts = asset.get("created_at", "")
+                    # created_at_with_millis kullan: created_at sonraki saniyeye yuvarlanmis,
+                    # bu 5s candle bucket'ini ~%23 oraninda yanlis hesapliyor.
+                    ts = asset.get("created_at_with_millis") or asset.get("created_at", "")
                     if not rate:
                         continue
                     try:
                         dt = datetime.fromisoformat(ts.replace("Z", "+00:00"))
                         minute = get_candle_key(dt)
                     except Exception:
-                        minute = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M")
+                        # Fallback: get_candle_key ile ayni format (unix bucket str)
+                        now_ts = int(time.time())
+                        minute = str((now_ts // CANDLE_SECONDS) * CANDLE_SECONDS)
 
                     if current_minute is None:
                         current_minute = minute
@@ -1043,14 +1079,17 @@ def handle_ws_message(payload):
                 "timestamp": time.time()
             }
             smart_money_history.append(deal)
-            current_smart_money = deal
+            # dict(deal) ile kopya al — orijinal deal mutasyonunu onler
+            # (aksi halde smart_money_history icindeki entry de degisir)
+            current_smart_money = dict(deal)
             if smart_money_history:
                 call_bet = sum(d["bet_amount"] for d in smart_money_history if d["trend"] == "call")
                 put_bet = sum(d["bet_amount"] for d in smart_money_history if d["trend"] == "put")
                 total_bet = call_bet + put_bet
                 dominant = "call" if call_bet >= put_bet else "put"
                 current_smart_money["trend"] = dominant
-                current_smart_money["bet_amount"] = total_bet // len(smart_money_history)
+                # // (floor division) yerine / — float kesimi onler
+                current_smart_money["bet_amount"] = total_bet / len(smart_money_history)
             trigger_ui_update()
         except Exception as e:
             logger.debug(f"[SOCIAL TRADING PARSE] {e}")
@@ -1062,7 +1101,7 @@ async def status_reporter():
         logger.info(f"[DURUM] Kaydedilecek Mumlar: {total_saved_count} | Fiyat: {last_tick_price:.8f} | Bekleyen: {len(pending_rows)} | Egilim: {sentiment_str}")
 
 async def watchdog_task():
-    global last_tick_time, active_page
+    global last_tick_time, active_page, restart_browser
     last_tick_time = time.time()
     while is_running:
         await asyncio.sleep(15)
@@ -1074,7 +1113,9 @@ async def watchdog_task():
                     await active_page.reload(wait_until="domcontentloaded", timeout=60000)
                     logger.info("[WATCHDOG] Sayfa basariyla yenilendi.")
                 except Exception as e:
-                    logger.error(f"[WATCHDOG HATA] Sayfa yenilenirken hata olustu: {e}")
+                    logger.error(f"[WATCHDOG HATA] Sayfa yenilenirken hata olustu (tarayici tamamen cokmus olabilir): {e}")
+                    logger.warning("[WATCHDOG] Tarayici yeniden baslatma sinyali gonderiliyor...")
+                    restart_browser = True
 
 def attach_ws_listeners(ws):
     url = ws.url
@@ -1092,97 +1133,124 @@ def attach_ws_listeners(ws):
 
 # ── Playwright & WebSocket Veri Toplayıcı Akışı ───────────────────────────────
 
+async def _launch_browser_session(pw, storage_state):
+    """Yeni bir Playwright tarayıcı oturumu açar ve sayfayı Binomo'ya yönlendirir.
+    Başarılı olursa (browser, context, page) üçlüsünü döndürür."""
+    global active_page
+
+    browser = await pw.chromium.launch(
+        headless=True,
+        args=[
+            "--no-sandbox",
+            "--disable-dev-shm-usage",
+            "--disable-blink-features=AutomationControlled",
+            "--disable-setuid-sandbox",
+        ]
+    )
+    context = await browser.new_context(
+        ignore_https_errors=True,
+        viewport={"width": 1280, "height": 800},
+    )
+
+    if storage_state:
+        try:
+            with open(storage_state, "r", encoding="utf-8") as f:
+                state = json.load(f)
+            cookies = state.get("cookies", [])
+            if cookies:
+                await context.add_cookies(cookies)
+                logger.info(f"[AUTH] {len(cookies)} adet cerez basariyla enjekte edildi.")
+        except Exception as e:
+            logger.error(f"[AUTH HATA] Cerezler enjekte edilirken hata: {e}")
+
+    async def on_new_page(page):
+        page.on("websocket", attach_ws_listeners)
+
+    context.on("page", on_new_page)
+
+    for page in context.pages:
+        page.on("websocket", attach_ws_listeners)
+
+    page = context.pages[0] if context.pages else await context.new_page()
+    active_page = page
+
+    logger.info(">>> Binomo platformu arka planda yukleniyor...")
+    try:
+        await page.goto(BINOMO_URL, wait_until="domcontentloaded", timeout=60000)
+    except Exception as e:
+        logger.error(f"[GOTO HATA] {e}")
+
+    current_url = page.url
+    logger.info(f"[SAYFA URL] Yuklenen sayfa: {current_url}")
+
+    if "sign-in" in current_url or "login" in current_url or "auth" in current_url:
+        logger.warning("[LOGIN] UYARI: Sayfa login sayfasina yonlendirdi! auth.json veya profil gecersiz olmis olabilir.")
+    elif "trade" in current_url:
+        logger.info("[LOGIN] Sayfa trading platformunda gorünüyor. [OK]")
+    else:
+        logger.info(f"[LOGIN] Sayfa durumu belirsiz (oturum acilmamis olabilir): {current_url}")
+
+    return browser, context, page
+
+
 async def run_collector():
+    global restart_browser, last_tick_time
+
     # CI/CD tespiti
     is_ci = os.environ.get("CI") or os.environ.get("GITHUB_ACTIONS")
     if is_ci:
         logger.info("[CI/CD] GitHub Actions ortami tespit edildi.")
-    logger.info(f"[PROFILE] Kullanilan profil dizini: {BROWSER_DATA_DIR}")
-
-    # Profil dizini kontrolü
-    default_dir = os.path.join(BROWSER_DATA_DIR, "Default")
-    if os.path.isdir(default_dir):
-        logger.info(f"[PROFILE] Default/ klasoru BULUNDU: {default_dir}")
-    else:
-        logger.warning(f"[PROFILE] UYARI: Default/ klasoru YOK! ({default_dir}) - Profil yuklenmeyecek!")
-        if os.path.exists(BROWSER_DATA_DIR):
-            logger.warning(f"[PROFILE] Dizindeki dosyalar: {os.listdir(BROWSER_DATA_DIR)[:10]}")
-        else:
-            logger.warning(f"[PROFILE] browser_data klasoru bulunmuyor, otomatik olusturulacak.")
 
     auth_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "auth.json")
     storage_state = auth_path if os.path.exists(auth_path) else None
     if storage_state:
-        logger.info(f"[AUTH] auth.json dosyasi bulundu, oturum verileri enjekte edilecek.")
+        logger.info("[AUTH] auth.json dosyasi bulundu, oturum verileri enjekte edilecek.")
 
     async with async_playwright() as pw:
-        context = await pw.chromium.launch_persistent_context(
-            user_data_dir=BROWSER_DATA_DIR,
-            headless=True,
-            args=[
-                "--no-sandbox",
-                "--disable-dev-shm-usage",
-                "--disable-blink-features=AutomationControlled",
-                "--disable-setuid-sandbox",
-            ],
-            ignore_https_errors=True,
-            viewport={"width": 1280, "height": 800},
-        )
-
-        if storage_state:
-            try:
-                with open(storage_state, "r", encoding="utf-8") as f:
-                    state = json.load(f)
-                cookies = state.get("cookies", [])
-                if cookies:
-                    await context.add_cookies(cookies)
-                    logger.info(f"[AUTH] {len(cookies)} adet cerez basariyla enjekte edildi.")
-            except Exception as e:
-                logger.error(f"[AUTH HATA] Cerezler enjekte edilirken hata: {e}")
-
-        async def on_new_page(page):
-            page.on("websocket", attach_ws_listeners)
-
-        context.on("page", on_new_page)
-
-        for page in context.pages:
-            page.on("websocket", attach_ws_listeners)
-
-        page = context.pages[0] if context.pages else await context.new_page()
-
-        global active_page
-        active_page = page
-
-        logger.info(">>> Binomo platformu arka planda yukleniyor...")
-        try:
-            await page.goto(BINOMO_URL, wait_until="domcontentloaded", timeout=60000)
-        except Exception as e:
-            logger.error(f"[GOTO HATA] {e}")
-
-        # Sayfa durumunu logla
-        current_url = page.url
-        logger.info(f"[SAYFA URL] Yuklenen sayfa: {current_url}")
-
-        # Login kontrolü
-        if "sign-in" in current_url or "login" in current_url or "auth" in current_url:
-            logger.warning("[LOGIN] UYARI: Sayfa login sayfasina yonlendirdi! auth.json veya profil gecersiz olmis olabilir.")
-        elif "trade" in current_url:
-            logger.info("[LOGIN] Sayfa trading platformunda gorünüyor. [OK]")
-        else:
-            logger.info(f"[LOGIN] Sayfa durumu belirsiz (oturum acilmamis olabilir): {current_url}")
-
+        # İlk oturumu başlat
+        browser, context, page = await _launch_browser_session(pw, storage_state)
         logger.info(">>> WebSocket akisi dinleniyor. Veri toplama aktif! [OK]")
 
+        # Watchdog ve durum raporlayıcı yalnızca bir kez başlatılır
         asyncio.create_task(status_reporter())
         asyncio.create_task(watchdog_task())
 
-        try:
-            while is_running:
+        while is_running:
+            try:
+                if restart_browser:
+                    restart_browser = False
+                    logger.warning("[RESTART] Tarayici oturumu kapatiliyor, 5 saniye bekleniyor...")
+                    try:
+                        await context.close()
+                    except Exception:
+                        pass
+                    try:
+                        await browser.close()
+                    except Exception:
+                        pass
+
+                    await asyncio.sleep(5)
+                    logger.info("[RESTART] Yeni tarayici oturumu baslatiliyor...")
+                    try:
+                        browser, context, page = await _launch_browser_session(pw, storage_state)
+                        last_tick_time = time.time()  # Watchdog sayacını sıfırla
+                        logger.info("[RESTART] Tarayici basariyla yeniden baslatildi. [OK]")
+                    except Exception as e:
+                        logger.error(f"[RESTART HATA] Yeniden baslatilamadi: {e}. 30 saniye sonra tekrar denenecek.")
+                        restart_browser = True  # Tekrar dene
+                        await asyncio.sleep(30)
+
                 await asyncio.sleep(1)
-        except Exception as e:
-            logger.error(f"[COLLECTOR HATA] Arka plan dongusu koptu: {e}")
-        finally:
+
+            except Exception as e:
+                logger.error(f"[COLLECTOR HATA] Ana dongu hatasi: {e}")
+                await asyncio.sleep(5)
+
+        # Temiz kapanış
+        try:
             await context.close()
+        except Exception:
+            pass
 
 # ── Ana Giriş ─────────────────────────────────────────────────────────────────
 # ── Ana Giriş ───────────────────────────────────────────────────────────
