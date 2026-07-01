@@ -50,6 +50,7 @@ current_std = 0.0
 current_radius = 0.0
 current_range_coeff = 1.0
 current_minute = None
+latest_server_timestamp = 0.0
 
 
 # Smart Money & Session Analysis
@@ -854,7 +855,7 @@ def save_row_to_csv(data_row, target_time, future_price, price_change, pnl_resul
     update_cli_stats(data_row["close"])
 
 def check_and_save_pending(current_price):
-    now = time.time()
+    now = latest_server_timestamp if latest_server_timestamp > 0.0 else time.time()
     for row in list(pending_rows):
         if now >= row["target_timestamp"]:
             # Vade asimi kontrolü (10 saniyeden fazla geciken veriler gürültü yapmamak için kaydedilmez)
@@ -978,7 +979,6 @@ def close_candle():
             logger.info(f"[ISINMA] {candle_count}/{WARMUP_CANDLE_COUNT} mum - indikatörler olgunlaşıyor, CSV'ye yazılmıyor.")
             return
         add_to_pending(result)
-        check_and_save_pending(candle["close"])
 
 def get_candle_key(dt):
     ts = int(dt.timestamp())
@@ -1011,6 +1011,8 @@ def handle_as_message(payload):
                     try:
                         dt = datetime.fromisoformat(ts.replace("Z", "+00:00"))
                         minute = get_candle_key(dt)
+                        global latest_server_timestamp
+                        latest_server_timestamp = dt.timestamp()
                     except Exception:
                         # Fallback: get_candle_key ile ayni format (unix bucket str)
                         now_ts = int(time.time())
