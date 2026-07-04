@@ -269,7 +269,7 @@ def calc_fibonacci_status(candles_1m_list, current_price) -> dict:
     return {
         "closest_level_name": closest_level_name,
         "closest_level_val": round(closest_level_val, 8) if closest_level_val else None,
-        "distance_pct": round(min_distance_pct, 4),
+        "distance_pct": round(min_distance_pct, 8),
         "warning": warning
     }
 
@@ -614,8 +614,8 @@ def analyze_candles() -> dict | None:
         elif price > bb_mid:
             bb_pos = "UPPER_HALF"
 
-    sup_dist = round(((price - sup) / sup) * 100, 3) if sup else 0.0
-    res_dist = round(((res - price) / res) * 100, 3) if res else 0.0
+    sup_dist = round(((price - sup) / sup) * 100, 8) if sup else 0.0
+    res_dist = round(((res - price) / res) * 100, 8) if res else 0.0
     vol_score = round((atr / price) * 1_000_000_000, 2) if atr is not None and price else 0.0
 
     # OBV Proxy
