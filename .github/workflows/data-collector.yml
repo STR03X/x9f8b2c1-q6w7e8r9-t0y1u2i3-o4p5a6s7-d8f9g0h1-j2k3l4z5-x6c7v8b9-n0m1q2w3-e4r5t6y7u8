@@ -1,36 +1,36 @@
-name: 7/24 Kesintisiz Veri Toplayıcı
+name: Tradeium AI Data Engine
 
 on:
-  workflow_dispatch: # Manuel başlatma butonu
+  workflow_dispatch:
   repository_dispatch:
-    types: [RESTART_BOT] # Otomatik döngü tetikleyicisi
+    types: [RESTART_BOT]
 
 jobs:
   collect:
     runs-on: ubuntu-latest
     steps:
-      - name: Proje Kodlarını Çek
+      - name: Depoyu Klonla
         uses: actions/checkout@v4
 
-      - name: Python Kur
+      - name: Python Ortamını Kur
         uses: actions/setup-python@v5
         with:
           python-version: "3.10"
 
-      - name: Gerekli Kütüphaneleri ve Tarayıcıyı Yükle
+      - name: Bağımlılıkları ve Tarayıcıyı Kur
         run: |
           pip install playwright colorama
           playwright install chromium
           playwright install-deps
 
-      - name: auth.json Dosyasini Olustur (Giris Cerezleri)
+      - name: Binomo Oturumunu Hazırla
         env:
           AUTH_JSON_DATA: ${{ secrets.BINOMO_AUTH_JSON }}
         run: |
           mkdir -p browser_data
           echo "$AUTH_JSON_DATA" > auth.json
 
-      - name: Veri Toplama Botunu Başlat (5 Saat 50 Dakika)
+      - name: Tradeium Veri Toplama Botunu Başlat
         run: |
           if [ ! -f "dataset.csv" ]; then
             touch dataset.csv
@@ -43,7 +43,7 @@ jobs:
             exit $STATUS
           fi
 
-      - name: Debug Dosyalarını Yükle (Teşhis İçin)
+      - name: Log Dosyalarını Kaydet
         if: always()
         uses: actions/upload-artifact@v4
         with:
@@ -54,15 +54,16 @@ jobs:
           if-no-files-found: warn
           retention-days: 3
 
-      - name: Toplanan Verileri GitHub Deposuna Kaydet (Commit & Push)
+      - name: Veri Setini Güncelle
         run: |
           git config --global user.name "GitHub Actions Bot"
           git config --global user.email "actions@github.com"
+          git pull --rebase origin main || git pull --rebase origin master || echo "Pull yapilamadi, devam ediliyor"
           git add dataset.csv
           git commit -m "Veri seti güncellendi [Otomatik]" || echo "Değişiklik yok"
           git push
 
-      - name: Sonraki 6 Saatlik Döngüyü Tetikle (Sonsuz Döngü)
+      - name: Botu Yeniden Başlat
         run: |
           curl -X POST \
             -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" \
