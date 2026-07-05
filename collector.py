@@ -918,8 +918,8 @@ if os.path.exists(CSV_PATH):
     except Exception:
         total_saved_count = 0
 
-# ── Isınma Sayacı (ilk 180 mum CSV'ye yazılmaz) ───────────────────────────────
-WARMUP_CANDLE_COUNT = 180
+# ── Isınma Sayacı (ilk 720 mum CSV'ye yazılmaz) ───────────────────────────────
+WARMUP_CANDLE_COUNT = 720
 candle_count = 0
 
 last_tick_price = 0.0
