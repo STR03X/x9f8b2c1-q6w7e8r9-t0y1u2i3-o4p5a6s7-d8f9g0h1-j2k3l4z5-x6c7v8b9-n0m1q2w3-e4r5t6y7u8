@@ -919,7 +919,7 @@ if os.path.exists(CSV_PATH):
         total_saved_count = 0
 
 # ── Isınma Sayacı (ilk 720 mum CSV'ye yazılmaz) ───────────────────────────────
-WARMUP_CANDLE_COUNT = 720
+WARMUP_CANDLE_COUNT = 360  # 720 → 360 (30 dakika — tüm indikatörler bu sürede ısınır)
 candle_count = 0
 
 last_tick_price = 0.0
