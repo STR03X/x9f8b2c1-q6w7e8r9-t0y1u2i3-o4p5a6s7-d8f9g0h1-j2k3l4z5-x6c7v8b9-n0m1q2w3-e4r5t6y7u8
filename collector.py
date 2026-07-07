@@ -240,13 +240,15 @@ def calc_fibonacci_status(candles_list, current_price) -> dict:
             min_distance_pct = dist_pct
             closest_level_name = name
             closest_level_val = val
+    range_pct = (diff / lowest_low) * 100
+    threshold = range_pct * 0.05
     warning = "Normal"
-    if min_distance_pct < 0.03:
+    if min_distance_pct < threshold:
         warning = "Yakın"
     return {
         "closest_level_name": closest_level_name,
-        "closest_level_val": round(closest_level_val, 8) if closest_level_val else None,
-        "distance_pct": round(min_distance_pct, 8),
+        "closest_level_val": round(closest_level_val, 14) if closest_level_val else None,
+        "distance_pct": round(min_distance_pct, 12),
         "warning": warning
     }
 
@@ -735,7 +737,7 @@ if os.path.exists(CSV_PATH):
     except Exception:
         total_saved_count = 0
 
-WARMUP_CANDLE_COUNT = 720
+WARMUP_CANDLE_COUNT = 200
 candle_count = 0
 
 last_tick_price = 0.0
@@ -756,7 +758,7 @@ def save_row_to_csv(data_row, target_time, future_price, price_change, pnl_resul
         elif col == "target_price":
             row_data.append(future_price)
         elif col == "price_change":
-            row_data.append(round(price_change, 8))
+            row_data.append(round(price_change, 14))
         elif col == "pnl_result":
             row_data.append(pnl_result)
         else:
