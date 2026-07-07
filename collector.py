@@ -10,7 +10,6 @@ from collections import deque
 from typing import Any
 from playwright.async_api import async_playwright
 
-# ── Logging Ayarları ──────────────────────────────────────────────────────────
 crash_handler = logging.FileHandler("crash.log", encoding="utf-8", delay=True)
 crash_handler.setLevel(logging.WARNING)
 crash_handler.setFormatter(logging.Formatter("%(asctime)s [%(levelname)s] %(message)s"))
@@ -26,28 +25,16 @@ logging.basicConfig(
 )
 logger = logging.getLogger("Collector")
 
-# ── Ayarlar ───────────────────────────────────────────────────────────────────
 BINOMO_URL = "https://binomo.com/trading"
 CANDLE_SECONDS = 5
 WINDOW_SIZE = 60
 MIN_TICKS = 5
-YATAY_TOLERANCE_PCT = 0.0  # Mikroskobik değişimleri yakalamak için tolerans sıfırlandı.
+YATAY_TOLERANCE_PCT = 0.0 
 
-
-# ── Veri Depoları ─────────────────────────────────────────────────────────────
 ticks = []
 candles = deque(maxlen=300)
-candles_15s = deque(maxlen=150)
-candles_30s = deque(maxlen=150)
-candles_1m = deque(maxlen=150)
 candles_5m = deque(maxlen=150)
-ticks_for_15s = []
-ticks_for_30s = []
-ticks_for_1m = []
 ticks_for_5m = []
-current_15s_bucket = None
-current_30s_bucket = None
-current_1m_bucket = None
 current_5m_bucket = None
 current_sentiment = {"call": 50, "put": 50}
 sentiment_history = deque(maxlen=60)
@@ -58,8 +45,6 @@ current_range_coeff = 1.0
 current_minute = None
 latest_server_timestamp = 0.0
 
-
-# Smart Money & Session Analysis
 current_smart_money = {
     "trend": None,
     "bet_amount": 0,
@@ -67,14 +52,12 @@ current_smart_money = {
     "timestamp": None
 }
 session_start_time = None
-restart_browser = False  # Watchdog tarafından set edilir → run_collector tarayıcıyı yeniden başlatır
+restart_browser = False
 session_range_coefficient = 1.0
 
-# ── Etiketleme Deposu ─────────────────────────────────────────────────────────
 pending_rows = []
 CSV_PATH = "dataset.csv"
 
-# ── CSV Başlıkları (Headers) ──────────────────────────────────────────────────
 CSV_HEADERS = [
     "timestamp", "close", "rsi", "macd_line", "macd_hist", "stoch_k", "stoch_d",
     "ema9", "ema21", "ema_signal", "bollinger_width", "bollinger_position",
@@ -93,45 +76,17 @@ CSV_HEADERS = [
     "volatility_ratio",
     "tick_count", "tick_ratio",
     "sentiment_change_t1",
-    
-    # 15s Features
-    "rsi_15s", "macd_line_15s", "macd_hist_15s", "stoch_k_15s", "stoch_d_15s", "ema_signal_15s",
-    "bollinger_width_15s", "bollinger_position_15s", "bollinger_squeeze_15s", "sar_15s", "sar_dev_15s", "atr_15s", "vol_score_15s",
-    "pattern_15s", "support_dist_pct_15s", "resistance_dist_pct_15s",
-    "price_diff_t1_15s", "price_diff_t2_15s", "rsi_diff_t1_15s", "rsi_diff_t2_15s",
-    "macd_hist_slope_15s", "stoch_diff_15s", "bollinger_pct_b_15s", "ema9_dev_15s", "ema21_dev_15s",
-    "volatility_ratio_15s",
-    
-    # 30s Features
-    "rsi_30s", "macd_line_30s", "macd_hist_30s", "stoch_k_30s", "stoch_d_30s", "ema_signal_30s",
-    "bollinger_width_30s", "bollinger_position_30s", "bollinger_squeeze_30s", "sar_30s", "sar_dev_30s", "atr_30s", "vol_score_30s",
-    "pattern_30s", "support_dist_pct_30s", "resistance_dist_pct_30s",
-    "price_diff_t1_30s", "price_diff_t2_30s", "rsi_diff_t1_30s", "rsi_diff_t2_30s",
-    "macd_hist_slope_30s", "stoch_diff_30s", "bollinger_pct_b_30s", "ema9_dev_30s", "ema21_dev_30s",
-    "volatility_ratio_30s",
-    
-    # 1m Features
-    "rsi_1m", "macd_line_1m", "macd_hist_1m", "stoch_k_1m", "stoch_d_1m", "ema_signal_1m",
-    "bollinger_width_1m", "bollinger_position_1m", "bollinger_squeeze_1m", "sar_1m", "sar_dev_1m", "atr_1m", "vol_score_1m",
-    "pattern_1m", "support_dist_pct_1m", "resistance_dist_pct_1m",
-    "price_diff_t1_1m", "price_diff_t2_1m", "rsi_diff_t1_1m", "rsi_diff_t2_1m",
-    "macd_hist_slope_1m", "stoch_diff_1m", "bollinger_pct_b_1m", "ema9_dev_1m", "ema21_dev_1m",
-    "volatility_ratio_1m",
-    
     "target_seconds", "target_price", "price_change", "pnl_result"
 ]
 
 def init_csv():
-    """CSV dosyasını hazırlar, başlıklar yoksa veya içi boşsa ekler."""
     if not os.path.exists(CSV_PATH) or os.path.getsize(CSV_PATH) == 0:
         with open(CSV_PATH, "w", newline="", encoding="utf-8") as f:
             writer = csv.writer(f)
             writer.writerow(CSV_HEADERS)
-        logger.info(f"[CSV] {CSV_PATH} basariyla olusturuldu ve basliklar yazildi.")
+        logger.info(f"[CSV] {CSV_PATH} basariyla olusturuldu.")
 
 init_csv()
-
-# ── İndikatör Hesaplama Motoru (main.py ile birebir uyumlu) ────────────────────
 
 def calc_adx(candles_list, period=14):
     if len(candles_list) < period * 2 + 1:
@@ -220,29 +175,20 @@ def detect_bollinger_squeeze(prices, period=20, window_len=40):
     threshold = sorted_widths[percentile_20_index]
     return current_width <= threshold
 
-def detect_market_regime(candles_1m_list, range_coeff) -> str:
-    """
-    Piyasa rejimini ADX + adaptive Bollinger Width ile tespit eder.
-    NOT: range_coeff Binomo WS'ten her zaman '2.20' sabit geliyor,
-    bu yuzden skorlamadan cikarildi — sabit deger ML'e bilgi vermez.
-    """
-    if len(candles_1m_list) < 30:
-        return "YATAY_PIYASA"  # Yeterli veri yok, tahmin yapma
-    adx = calc_adx(list(candles_1m_list), 14)
-    closes = [c["close"] for c in candles_1m_list]
+def detect_market_regime(candles_list, range_coeff) -> str:
+    if len(candles_list) < 30:
+        return "RANGING"
+    adx = calc_adx(list(candles_list), 14)
+    closes = [c["close"] for c in candles_list]
     bb_width = calc_bollinger_width(closes, 20)
     score = 0
 
-    # ADX skoru (degismedi)
     if adx is not None:
         if adx > 25:
             score += 2
         elif adx < 20:
             score -= 1
 
-    # Adaptive BB Width: son 30 mum icerisindeki genisliklerin percentile'i
-    # Sabit esik (0.0015) bu varligin olceginde hic tetiklenmiyordu.
-    # Simdiki bb_width > son 30 mumdaki medyanin %120'si ise trend genisliyor.
     if bb_width is not None:
         n = len(closes)
         recent_widths = [
@@ -252,19 +198,19 @@ def detect_market_regime(candles_1m_list, range_coeff) -> str:
         recent_widths = [w for w in recent_widths if w is not None]
         if len(recent_widths) >= 5:
             sorted_w = sorted(recent_widths)
-            p80 = sorted_w[int(len(sorted_w) * 0.8)]   # Geniş bant eşiği
-            p20 = sorted_w[max(0, int(len(sorted_w) * 0.2))]  # Dar bant eşiği
-            if bb_width >= p80:      # Bant genisliyor → trend var
+            p80 = sorted_w[int(len(sorted_w) * 0.8)]
+            p20 = sorted_w[max(0, int(len(sorted_w) * 0.2))]
+            if bb_width >= p80:
                 score += 2
-            elif bb_width <= p20:   # Bant sikisor → yatay
+            elif bb_width <= p20:
                 score -= 1
 
     if score >= 2:
-        return "GUCLU_TREND"
-    return "YATAY_PIYASA"
+        return "STRONG_TREND"
+    return "RANGING"
 
-def calc_fibonacci_status(candles_1m_list, current_price) -> dict:
-    clist = list(candles_1m_list)
+def calc_fibonacci_status(candles_list, current_price) -> dict:
+    clist = list(candles_list)
     if len(clist) < 15:
         return {"closest_level_name": "YOK", "closest_level_val": None, "distance_pct": 999.0, "warning": "Yetersiz veri"}
     highs = [c["high"] for c in clist]
@@ -367,7 +313,6 @@ def calc_macd(prices):
         return None, None
     macd_series = []
     for i in range(26, len(prices) + 1):
-        # Doğru MACD: her iki EMA da tüm geçmiş fiyat dizisinden hesaplanmalı
         e12 = calc_ema(prices[:i], 12)
         e26 = calc_ema(prices[:i], 26)
         if e12 is not None and e26 is not None:
@@ -384,7 +329,6 @@ def calc_bollinger(prices, period=20):
         return None, None, None
     subset = prices[-period:]
     sma = sum(subset) / period
-    # TradingView uyumlu: nüfus (population) standart sapması kullanılır (bölen: period)
     std = (sum((x - sma) ** 2 for x in subset) / period) ** 0.5
     return sma, sma + 2 * std, sma - 2 * std
 
@@ -404,7 +348,6 @@ def calc_parabolic_sar(highs, lows, af_start=0.02, af_max=0.2, af_step=0.02):
         prev_sar = sar[-1]
         if bull:
             current_sar = prev_sar + af * (ep - prev_sar)
-            # Standart SAR kuralı: bull modda SAR, önceki iki mumun low'undan küçük olmalı
             if i >= 2:
                 current_sar = min(current_sar, lows[i - 1], lows[i - 2])
             elif i == 1:
@@ -420,7 +363,6 @@ def calc_parabolic_sar(highs, lows, af_start=0.02, af_max=0.2, af_step=0.02):
                     af = min(af_max, af + af_step)
         else:
             current_sar = prev_sar + af * (ep - prev_sar)
-            # Standart SAR kuralı: bear modda SAR, önceki iki mumun high'ından büyük olmalı
             if i >= 2:
                 current_sar = max(current_sar, highs[i - 1], highs[i - 2])
             elif i == 1:
@@ -458,7 +400,6 @@ def calc_atr(candles_list, period=14):
             continue
     if not trs:
         return None
-    # Wilder'ın üstel yumuşatması (RMA) — basit ortalama yerine
     actual_period = min(period, len(trs))
     atr = sum(trs[:actual_period]) / actual_period
     for tr in trs[actual_period:]:
@@ -530,27 +471,27 @@ def get_support_resistance(candles_list, period=50, tolerance=0.0005):
 
 def get_higher_timeframe_trend(candles_list, tf_multiplier=5):
     if len(candles_list) < tf_multiplier * 3:
-        return "YATAY"
+        return "RANGING"
     htf_closes = []
     for i in range(0, len(candles_list), tf_multiplier):
         chunk = candles_list[i:i + tf_multiplier]
         if len(chunk) == tf_multiplier:
             htf_closes.append(chunk[-1]["close"])
     if len(htf_closes) < 3:
-        return "YATAY"
+        return "RANGING"
     ema_fast = calc_ema(htf_closes, min(3, len(htf_closes)))
     ema_slow = calc_ema(htf_closes, min(5, len(htf_closes))) if len(htf_closes) >= 5 else None
     if ema_slow is not None:
         if ema_fast > ema_slow:
-            return "YÜKSELİŞ"
+            return "BULLISH"
         elif ema_fast < ema_slow:
-            return "DÜŞÜŞ"
-        return "YATAY"
+            return "BEARISH"
+        return "RANGING"
     if htf_closes[-1] > htf_closes[-2] and htf_closes[-2] > htf_closes[-3]:
-        return "YÜKSELİŞ"
+        return "BULLISH"
     elif htf_closes[-1] < htf_closes[-2] and htf_closes[-2] < htf_closes[-3]:
-        return "DÜŞÜŞ"
-    return "YATAY"
+        return "BEARISH"
+    return "RANGING"
 
 def calculate_sentiment_momentum():
     if len(sentiment_history) < 2:
@@ -570,20 +511,19 @@ def calculate_sentiment_momentum():
     return "Neutral"
 
 def calculate_smart_money_strength() -> int:
-    """Smart Money gücünü numerik (0-4) olarak döndürür."""
     if not current_smart_money.get("trend"):
         return 0
     sm_time = current_smart_money.get("timestamp")
-    if sm_time and (time.time() - sm_time) > 180: # 3 dakika stale
+    if sm_time and (time.time() - sm_time) > 180:
         return 0
     bet_amount = current_smart_money.get("bet_amount", 0)
     if bet_amount > 1000:
-        return 4  # VERY STRONG
+        return 4
     elif bet_amount > 500:
-        return 3  # STRONG
+        return 3
     elif bet_amount > 100:
-        return 2  # MEDIUM
-    return 1  # WEAK
+        return 2
+    return 1
 
 def analyze_timeframe(candle_list) -> dict | None:
     clist = list(candle_list)
@@ -602,119 +542,6 @@ def analyze_timeframe(candle_list) -> dict | None:
     color = "GREEN" if last_candle["close"] >= last_candle["open"] else "RED"
     return {"color": color, "ema_signal": ema_signal, "rsi": round(rsi, 2) if rsi else 50.0}
 
-def extract_tf_features(candles_tf, suffix):
-    clist = list(candles_tf)
-    clist = [c for c in clist if isinstance(c, dict) and all(k in c for k in ("open", "high", "low", "close"))]
-    closes = [c["close"] for c in clist]
-    highs = [c["high"] for c in clist]
-    lows = [c["low"] for c in clist]
-    n = len(closes)
-
-    price = closes[-1] if n > 0 else 0.0
-    ema9 = calc_ema(closes, 9)
-    ema21 = calc_ema(closes, 21)
-    rsi = calc_rsi(closes)
-    stoch_k, stoch_d = calc_stoch_rsi(closes)
-    macd_v, macd_h = calc_macd(closes)
-    bb_mid, bb_up, bb_lo = calc_bollinger(closes)
-    momentum = calc_momentum(closes)
-    atr = calc_atr(clist)
-    sar = calc_parabolic_sar(highs, lows)
-    pattern = detect_patterns(clist)
-    atr_val = atr if (atr is not None and atr > 0) else 0.0000001
-    sup, res = get_support_resistance(clist, tolerance=(atr_val / price) if price else 0.0005)
-
-    ema_signal = "YATAY"
-    if ema9 is not None and ema21 is not None:
-        ema_signal = "UP" if ema9 > ema21 else "DOWN"
-
-    bb_pos = "LOWER_HALF"
-    if bb_up and bb_lo:
-        if price > bb_up:
-            bb_pos = "ABOVE_UPPER"
-        elif price < bb_lo:
-            bb_pos = "BELOW_LOWER"
-        elif price > bb_mid:
-            bb_pos = "UPPER_HALF"
-
-    sup_dist = round(((price - sup) / sup) * 100, 8) if sup else 0.0
-    res_dist = round(((res - price) / res) * 100, 8) if res else 0.0
-    vol_score = round((atr / price) * 1_000_000_000, 2) if atr is not None and price else 0.0
-
-    price_diff_t1 = 0.0
-    price_diff_t2 = 0.0
-    if len(closes) > 1 and closes[-2] != 0:
-        price_diff_t1 = round(((closes[-1] - closes[-2]) / closes[-2]) * 100, 12)
-    if len(closes) > 2 and closes[-3] != 0:
-        price_diff_t2 = round(((closes[-1] - closes[-3]) / closes[-3]) * 100, 12)
-
-    rsi_diff_t1 = 0.0
-    rsi_diff_t2 = 0.0
-    if len(closes) > 1:
-        prev_rsi = calc_rsi(closes[:-1])
-        if rsi is not None and prev_rsi is not None:
-            rsi_diff_t1 = round(rsi - prev_rsi, 4)
-    if len(closes) > 2:
-        prev_2_rsi = calc_rsi(closes[:-2])
-        if rsi is not None and prev_2_rsi is not None:
-            rsi_diff_t2 = round(rsi - prev_2_rsi, 4)
-
-    macd_hist_slope = 0.0
-    if len(closes) > 1:
-        _, prev_macd_h = calc_macd(closes[:-1])
-        if macd_h is not None and prev_macd_h is not None:
-            macd_hist_slope = round(macd_h - prev_macd_h, 12)
-
-    stoch_diff = round(stoch_k - stoch_d, 4) if (stoch_k is not None and stoch_d is not None) else 0.0
-
-    bollinger_pct_b = 0.5
-    if bb_up is not None and bb_lo is not None:
-        denom = bb_up - bb_lo
-        if denom != 0:
-            bollinger_pct_b = round((price - bb_lo) / denom, 6)
-
-    ema9_dev = 0.0
-    ema21_dev = 0.0
-    if ema9 is not None and ema9 != 0:
-        ema9_dev = round(((price - ema9) / ema9) * 100, 12)
-    if ema21 is not None and ema21 != 0:
-        ema21_dev = round(((price - ema21) / ema21) * 100, 12)
-
-    volatility_ratio = 1.0
-    atr_50 = calc_atr(clist, 50)
-    if atr is not None and atr_50 is not None and atr_50 != 0:
-        volatility_ratio = round(atr / atr_50, 6)
-
-    sar_dev = round(((price - sar) / price) * 100, 12) if price != 0 and sar is not None else 0.0
-
-    return {
-        "rsi" + suffix: round(rsi, 2) if rsi is not None else 50.0,
-        "macd_line" + suffix: round(macd_v, 12) if macd_v is not None else 0.0,
-        "macd_hist" + suffix: round(macd_h, 12) if macd_h is not None else 0.0,
-        "stoch_k" + suffix: round(stoch_k, 2) if stoch_k is not None else 50.0,
-        "stoch_d" + suffix: round(stoch_d, 2) if stoch_d is not None else 50.0,
-        "ema_signal" + suffix: ema_signal,
-        "bollinger_width" + suffix: round((calc_bollinger_width(closes, 20) or 0.0) * 1e12, 6),
-        "bollinger_position" + suffix: bb_pos,
-        "bollinger_squeeze" + suffix: 1 if detect_bollinger_squeeze(closes, 20, 40) else 0,
-        "sar" + suffix: round(sar, 12) if sar is not None else price,
-        "sar_dev" + suffix: sar_dev,
-        "atr" + suffix: round(atr, 12) if atr else 0.0,
-        "vol_score" + suffix: vol_score,
-        "pattern" + suffix: pattern,
-        "support_dist_pct" + suffix: sup_dist,
-        "resistance_dist_pct" + suffix: res_dist,
-        "price_diff_t1" + suffix: price_diff_t1,
-        "price_diff_t2" + suffix: price_diff_t2,
-        "rsi_diff_t1" + suffix: rsi_diff_t1,
-        "rsi_diff_t2" + suffix: rsi_diff_t2,
-        "macd_hist_slope" + suffix: macd_hist_slope,
-        "stoch_diff" + suffix: stoch_diff,
-        "bollinger_pct_b" + suffix: bollinger_pct_b,
-        "ema9_dev" + suffix: ema9_dev,
-        "ema21_dev" + suffix: ema21_dev,
-        "volatility_ratio" + suffix: volatility_ratio
-    }
 
 def analyze_candles() -> dict | None:
     clist = list(candles)
@@ -763,7 +590,6 @@ def analyze_candles() -> dict | None:
     res_dist = round(((res - price) / res) * 100, 8) if res else 0.0
     vol_score = round((atr / price) * 1_000_000_000, 2) if atr is not None and price else 0.0
 
-    # OBV Proxy
     obv_proxy = 0.0
     for c in clist:
         if c["close"] >= c["open"]:
@@ -784,10 +610,8 @@ def analyze_candles() -> dict | None:
     else:
         obv_trend = "FLAT"
 
-    tf_1m = analyze_timeframe(candles_1m)
-    tf_5m = analyze_timeframe(candles_5m)
-    market_regime = detect_market_regime(candles_1m, current_range_coeff)
-    fib = calc_fibonacci_status(candles_1m, price)
+    market_regime = detect_market_regime(candles, current_range_coeff)
+    fib = calc_fibonacci_status(candles, price)
 
     try:
         ts_val = int(clist[-1]["time"])
@@ -901,25 +725,17 @@ def analyze_candles() -> dict | None:
         "sentiment_change_t1": sentiment_change_t1
     }
 
-    # Extract multi-timeframe features and merge
-    res_dict.update(extract_tf_features(candles_15s, "_15s"))
-    res_dict.update(extract_tf_features(candles_30s, "_30s"))
-    res_dict.update(extract_tf_features(candles_1m, "_1m"))
-
     return res_dict
-
-# ── Gelecek Fiyat Takip & CSV Yazma Sistemi ───────────────────────────────────
 
 total_saved_count = 0
 if os.path.exists(CSV_PATH):
     try:
         with open(CSV_PATH, "r", encoding="utf-8") as f:
-            total_saved_count = sum(1 for _ in f) - 1  # Başlığı saymıyoruz
+            total_saved_count = sum(1 for _ in f) - 1
     except Exception:
         total_saved_count = 0
 
-# ── Isınma Sayacı (ilk 720 mum CSV'ye yazılmaz) ───────────────────────────────
-WARMUP_CANDLE_COUNT = 720  # 720 → 360 (30 dakika — tüm indikatörler bu sürede ısınır)
+WARMUP_CANDLE_COUNT = 720
 candle_count = 0
 
 last_tick_price = 0.0
@@ -964,7 +780,6 @@ def check_and_save_pending(current_price):
     now = latest_server_timestamp if latest_server_timestamp > 0.0 else time.time()
     for row in list(pending_rows):
         if now >= row["target_timestamp"]:
-            # Vade asimi kontrolü (10 saniyeden fazla geciken veriler gürültü yapmamak için kaydedilmez)
             if now - row["target_timestamp"] > 10:
                 logger.warning(f"[STALE] Vade gecikmesi toleransi asildi! Vade: {datetime.fromtimestamp(row['target_timestamp']).strftime('%H:%M:%S')} | Gecikme: {now - row['target_timestamp']:.1f}s | Kaydedilmeden temizleniyor.")
                 pending_rows.remove(row)
@@ -976,13 +791,8 @@ def check_and_save_pending(current_price):
             elif price_change < 0:
                 pnl_result = 0
             else:
-                # Beraberlik: entry == exit (float tam esitlik)
-                # Bu varlikta fiyat 1E-8 adimlarla hareket ediyor;
-                # tam esitlik = o an hic hareket olmadi demek.
-                # Binary classification icin anlamsiz label → kaydetme, atla.
                 logger.warning(
-                    f"[BERABERLIK] Entry={row['close']:.11f} == Exit={current_price:.11f} "
-                    f"| Kaydedilmeden atlaniyor."
+                    f"[BERABERLIK] Entry={row['close']:.11f} == Exit={current_price:.11f}"
                 )
                 pending_rows.remove(row)
                 continue
@@ -1007,12 +817,10 @@ def add_to_pending(analysis_data):
     update_cli_stats(analysis_data["close"])
     logger.info(f"[TAKIP] Mum: {datetime.fromtimestamp(ts).strftime('%H:%M:%S')} -> Vade: {datetime.fromtimestamp(target_timestamp).strftime('%H:%M:%S')} ({target_seconds_in_future}s)")
 
-# ── Mum Oluşturucu ────────────────────────────────────────────────────────────
 
 def close_candle():
     global ticks, current_minute
-    global current_15s_bucket, ticks_for_15s, candles_15s, current_30s_bucket, ticks_for_30s, candles_30s
-    global current_1m_bucket, ticks_for_1m, current_5m_bucket, ticks_for_5m, candles_1m, candles_5m
+    global current_5m_bucket, ticks_for_5m, candles_5m
     if len(ticks) < MIN_TICKS:
         ticks = []
         return
@@ -1021,7 +829,7 @@ def close_candle():
     spreads = [t["ask"] - t["bid"] for t in ticks]
 
     candle = {
-        "time": int(current_minute),  # Her zaman int olarak sakla
+        "time": int(current_minute),
         "open": rates[0],
         "high": max(rates),
         "low": min(rates),
@@ -1036,67 +844,10 @@ def close_candle():
 
     try:
         ts = int(candle["time"])
-        b15s = (ts // 15) * 15
-        b30s = (ts // 30) * 30
-        b1m = (ts // 60) * 60
         b5m = (ts // 300) * 300
 
-        if current_15s_bucket is None:
-            current_15s_bucket = b15s
-        if current_30s_bucket is None:
-            current_30s_bucket = b30s
-        if current_1m_bucket is None:
-            current_1m_bucket = b1m
         if current_5m_bucket is None:
             current_5m_bucket = b5m
-
-        if b15s != current_15s_bucket:
-            if ticks_for_15s:
-                c15s = {
-                    "time": str(current_15s_bucket),
-                    "open": ticks_for_15s[0]["open"],
-                    "high": max(x["high"] for x in ticks_for_15s),
-                    "low": min(x["low"] for x in ticks_for_15s),
-                    "close": ticks_for_15s[-1]["close"],
-                    "tick_count": sum(x["tick_count"] for x in ticks_for_15s),
-                    "spread_avg": sum(x.get("spread_avg", 0.0) for x in ticks_for_15s) / len(ticks_for_15s)
-                }
-                candles_15s.append(c15s)
-                ticks_for_15s = []
-            current_15s_bucket = b15s
-        ticks_for_15s.append(candle)
-
-        if b30s != current_30s_bucket:
-            if ticks_for_30s:
-                c30s = {
-                    "time": str(current_30s_bucket),
-                    "open": ticks_for_30s[0]["open"],
-                    "high": max(x["high"] for x in ticks_for_30s),
-                    "low": min(x["low"] for x in ticks_for_30s),
-                    "close": ticks_for_30s[-1]["close"],
-                    "tick_count": sum(x["tick_count"] for x in ticks_for_30s),
-                    "spread_avg": sum(x.get("spread_avg", 0.0) for x in ticks_for_30s) / len(ticks_for_30s)
-                }
-                candles_30s.append(c30s)
-                ticks_for_30s = []
-            current_30s_bucket = b30s
-        ticks_for_30s.append(candle)
-
-        if b1m != current_1m_bucket:
-            if ticks_for_1m:
-                c1m = {
-                    "time": str(current_1m_bucket),
-                    "open": ticks_for_1m[0]["open"],
-                    "high": max(x["high"] for x in ticks_for_1m),
-                    "low": min(x["low"] for x in ticks_for_1m),
-                    "close": ticks_for_1m[-1]["close"],
-                    "tick_count": sum(x["tick_count"] for x in ticks_for_1m),
-                    "spread_avg": sum(x.get("spread_avg", 0.0) for x in ticks_for_1m) / len(ticks_for_1m)
-                }
-                candles_1m.append(c1m)
-                ticks_for_1m = []
-            current_1m_bucket = b1m
-        ticks_for_1m.append(candle)
 
         if b5m != current_5m_bucket:
             if ticks_for_5m:
@@ -1130,8 +881,6 @@ def get_candle_key(dt):
     bucket = (ts // CANDLE_SECONDS) * CANDLE_SECONDS
     return str(bucket)
 
-# ── WebSocket İşleyicileri ────────────────────────────────────────────────────
-
 def handle_as_message(payload):
     global current_minute, ticks
     try:
@@ -1148,8 +897,6 @@ def handle_as_message(payload):
                     rate = asset.get("rate")
                     ask = asset.get("ask")
                     bid = asset.get("bid")
-                    # created_at_with_millis kullan: created_at sonraki saniyeye yuvarlanmis,
-                    # bu 5s candle bucket'ini ~%23 oraninda yanlis hesapliyor.
                     ts = asset.get("created_at_with_millis") or asset.get("created_at", "")
                     if not rate:
                         continue
@@ -1159,7 +906,6 @@ def handle_as_message(payload):
                         global latest_server_timestamp
                         latest_server_timestamp = dt.timestamp()
                     except Exception:
-                        # Fallback: get_candle_key ile ayni format (unix bucket str)
                         now_ts = int(time.time())
                         minute = str((now_ts // CANDLE_SECONDS) * CANDLE_SECONDS)
 
@@ -1176,7 +922,6 @@ def handle_as_message(payload):
                     last_tick_time = time.time()
 
 def trigger_ui_update():
-    """Placeholder for UI refresh; called when shared state (sentiment, range, smart money) changes."""
     pass
 
 def handle_ws_message(payload):
@@ -1226,8 +971,6 @@ def handle_ws_message(payload):
                 "timestamp": time.time()
             }
             smart_money_history.append(deal)
-            # dict(deal) ile kopya al — orijinal deal mutasyonunu onler
-            # (aksi halde smart_money_history icindeki entry de degisir)
             current_smart_money = dict(deal)
             if smart_money_history:
                 call_bet = sum(d["bet_amount"] for d in smart_money_history if d["trend"] == "call")
@@ -1235,7 +978,6 @@ def handle_ws_message(payload):
                 total_bet = call_bet + put_bet
                 dominant = "call" if call_bet >= put_bet else "put"
                 current_smart_money["trend"] = dominant
-                # // (floor division) yerine / — float kesimi onler
                 current_smart_money["bet_amount"] = total_bet / len(smart_money_history)
             trigger_ui_update()
         except Exception as e:
@@ -1278,11 +1020,7 @@ def attach_ws_listeners(ws):
         ws.on("framereceived", lambda p: handle_ws_message(p))
     ws.on("close", lambda: logger.info(f"[WS KAPANDI] {url}"))
 
-# ── Playwright & WebSocket Veri Toplayıcı Akışı ───────────────────────────────
-
 async def _launch_browser_session(pw, storage_state):
-    """Yeni bir Playwright tarayıcı oturumu açar ve sayfayı Binomo'ya yönlendirir.
-    Başarılı olursa (browser, context, page) üçlüsünü döndürür."""
     global active_page
 
     browser = await pw.chromium.launch(
@@ -1342,8 +1080,6 @@ async def _launch_browser_session(pw, storage_state):
 
 async def run_collector():
     global restart_browser, last_tick_time
-
-    # CI/CD tespiti
     is_ci = os.environ.get("CI") or os.environ.get("GITHUB_ACTIONS")
     if is_ci:
         logger.info("[CI/CD] GitHub Actions ortami tespit edildi.")
@@ -1354,11 +1090,9 @@ async def run_collector():
         logger.info("[AUTH] auth.json dosyasi bulundu, oturum verileri enjekte edilecek.")
 
     async with async_playwright() as pw:
-        # İlk oturumu başlat
         browser, context, page = await _launch_browser_session(pw, storage_state)
         logger.info(">>> WebSocket akisi dinleniyor. Veri toplama aktif! [OK]")
 
-        # Watchdog ve durum raporlayıcı yalnızca bir kez başlatılır
         asyncio.create_task(status_reporter())
         asyncio.create_task(watchdog_task())
 
@@ -1380,11 +1114,11 @@ async def run_collector():
                     logger.info("[RESTART] Yeni tarayici oturumu baslatiliyor...")
                     try:
                         browser, context, page = await _launch_browser_session(pw, storage_state)
-                        last_tick_time = time.time()  # Watchdog sayacını sıfırla
+                        last_tick_time = time.time() 
                         logger.info("[RESTART] Tarayici basariyla yeniden baslatildi. [OK]")
                     except Exception as e:
                         logger.error(f"[RESTART HATA] Yeniden baslatilamadi: {e}. 30 saniye sonra tekrar denenecek.")
-                        restart_browser = True  # Tekrar dene
+                        restart_browser = True  
                         await asyncio.sleep(30)
 
                 await asyncio.sleep(1)
@@ -1393,14 +1127,10 @@ async def run_collector():
                 logger.error(f"[COLLECTOR HATA] Ana dongu hatasi: {e}")
                 await asyncio.sleep(5)
 
-        # Temiz kapanış
         try:
             await context.close()
         except Exception:
             pass
-
-# ── Ana Giriş ─────────────────────────────────────────────────────────────────
-# ── Ana Giriş ───────────────────────────────────────────────────────────
 
 def main():
     global is_running
