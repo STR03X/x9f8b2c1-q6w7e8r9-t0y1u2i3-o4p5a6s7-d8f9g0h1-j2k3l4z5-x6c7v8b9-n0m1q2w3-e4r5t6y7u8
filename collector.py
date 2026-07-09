@@ -737,7 +737,7 @@ if os.path.exists(CSV_PATH):
     except Exception:
         total_saved_count = 0
 
-WARMUP_CANDLE_COUNT = 200
+WARMUP_CANDLE_COUNT = 120
 candle_count = 0
 
 last_tick_price = 0.0
@@ -869,13 +869,14 @@ def close_candle():
     except Exception as e:
         logger.error(f"[TIMEFRAME AGGREGATION HATA] {e}", exc_info=True)
 
+    global candle_count
+    candle_count += 1
+    if candle_count <= WARMUP_CANDLE_COUNT:
+        logger.info(f"[ISINMA] {candle_count}/{WARMUP_CANDLE_COUNT} mum - indikatörler olgunlaşıyor, CSV'ye yazılmıyor.")
+        return
+
     result = analyze_candles()
     if result:
-        global candle_count
-        candle_count += 1
-        if candle_count <= WARMUP_CANDLE_COUNT:
-            logger.info(f"[ISINMA] {candle_count}/{WARMUP_CANDLE_COUNT} mum - indikatörler olgunlaşıyor, CSV'ye yazılmıyor.")
-            return
         add_to_pending(result)
 
 def get_candle_key(dt):
