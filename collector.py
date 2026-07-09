@@ -1081,7 +1081,7 @@ async def _launch_browser_session(pw, storage_state):
 
 
 async def run_collector():
-    global restart_browser, last_tick_time
+    global restart_browser, last_tick_time, is_running
     is_ci = os.environ.get("CI") or os.environ.get("GITHUB_ACTIONS")
     if is_ci:
         logger.info("[CI/CD] GitHub Actions ortami tespit edildi.")
@@ -1090,6 +1090,12 @@ async def run_collector():
     storage_state = auth_path if os.path.exists(auth_path) else None
     if storage_state:
         logger.info("[AUTH] auth.json dosyasi bulundu, oturum verileri enjekte edilecek.")
+
+    start_time = time.time()
+    # Varsayilan olarak 5 saat 40 dakika (20400 saniye) sonra otomatik kapanir.
+    # Env var ile de degistirilebilir.
+    max_run_time = int(os.environ.get("MAX_RUN_TIME_SECONDS", 20400))
+    logger.info(f"[BASLANGIC] Maksimum calisme suresi: {max_run_time} saniye ({(max_run_time / 3600):.2f} saat) olarak belirlendi.")
 
     async with async_playwright() as pw:
         browser, context, page = await _launch_browser_session(pw, storage_state)
@@ -1100,6 +1106,12 @@ async def run_collector():
 
         while is_running:
             try:
+                # Maksimum calisme suresi kontrolu
+                if time.time() - start_time >= max_run_time:
+                    logger.info(f"[TIMEOUT] Maksimum calisme suresi doldu ({max_run_time} saniye). Uygulama guvenli sekilde kapatiliyor...")
+                    is_running = False
+                    break
+
                 if restart_browser:
                     restart_browser = False
                     logger.warning("[RESTART] Tarayici oturumu kapatiliyor, 5 saniye bekleniyor...")
