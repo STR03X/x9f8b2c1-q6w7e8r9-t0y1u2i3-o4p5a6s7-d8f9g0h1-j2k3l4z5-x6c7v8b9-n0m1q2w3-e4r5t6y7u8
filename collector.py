@@ -8,7 +8,7 @@ import sys
 from datetime import datetime, timezone
 from collections import deque
 from typing import Any
-import zendriver as zd
+from playwright.async_api import async_playwright
 
 crash_handler = logging.FileHandler("crash.log", encoding="utf-8", delay=True)
 crash_handler.setLevel(logging.WARNING)
@@ -1002,35 +1002,42 @@ async def watchdog_task():
             last_tick_time = time.time()
             if active_page:
                 try:
-                    await active_page.reload()
+                    await active_page.reload(wait_until="domcontentloaded", timeout=60000)
                     logger.info("[WATCHDOG] Sayfa basariyla yenilendi.")
                 except Exception as e:
                     logger.error(f"[WATCHDOG HATA] Sayfa yenilenirken hata olustu (tarayici tamamen cokmus olabilir): {e}")
                     logger.warning("[WATCHDOG] Tarayici yeniden baslatma sinyali gonderiliyor...")
                     restart_browser = True
 
-ws_url_map = {}
+def attach_ws_listeners(ws):
+    url = ws.url
+    logger.info(f"[WS BAGLANDI] >>> URL: {url}")
+    if "as.binomo.com" in url:
+        logger.info(f"[WS] Fiyat akisi (as.binomo.com) baglandi!")
+        ws.on("framereceived", lambda p: handle_as_message(p))
+    elif "binomo.com" in url or "bn." in url or "bnomo" in url.lower():
+        logger.info(f"[WS] Genel Binomo WS baglandi: {url}")
+        ws.on("framereceived", lambda p: handle_ws_message(p))
+    else:
+        logger.info(f"[WS] Bilinmeyen WS (dinleniyor): {url}")
+        ws.on("framereceived", lambda p: handle_ws_message(p))
+    ws.on("close", lambda: logger.info(f"[WS KAPANDI] {url}"))
 
-async def _launch_browser_session(storage_state):
-    global active_page, ws_url_map
+async def _launch_browser_session(pw, storage_state):
+    global active_page
 
-    is_ci = os.environ.get("CI") or os.environ.get("GITHUB_ACTIONS")
-    browser_path = None
-    if is_ci:
-        for path in ["/usr/bin/google-chrome", "/opt/google/chrome/chrome"]:
-            if os.path.exists(path):
-                browser_path = path
-                break
-
-    browser = await zd.start(
+    browser = await pw.chromium.launch(
         headless=True,
-        sandbox=False,
-        browser_executable_path=browser_path,
-        browser_args=[
+        args=[
             "--no-sandbox",
             "--disable-dev-shm-usage",
+            "--disable-blink-features=AutomationControlled",
             "--disable-setuid-sandbox",
         ]
+    )
+    context = await browser.new_context(
+        ignore_https_errors=True,
+        viewport={"width": 1280, "height": 800},
     )
 
     if storage_state:
@@ -1039,66 +1046,29 @@ async def _launch_browser_session(storage_state):
                 state = json.load(f)
             cookies = state.get("cookies", [])
             if cookies:
-                cookies_to_set = []
-                for c in cookies:
-                    same_site = None
-                    if c.get("sameSite"):
-                        val = c["sameSite"].lower()
-                        if val == "lax":
-                            same_site = zd.cdp.network.CookieSameSite.LAX
-                        elif val == "strict":
-                            same_site = zd.cdp.network.CookieSameSite.STRICT
-                        elif val == "none":
-                            same_site = zd.cdp.network.CookieSameSite.NONE
-
-                    cp = zd.cdp.network.CookieParam(
-                        name=c["name"],
-                        value=c["value"],
-                        domain=c["domain"],
-                        path=c.get("path", "/"),
-                        secure=c.get("secure", False),
-                        http_only=c.get("httpOnly", False),
-                        same_site=same_site,
-                        expires=zd.cdp.network.TimeSinceEpoch(c["expires"]) if c.get("expires") is not None else None
-                    )
-                    cookies_to_set.append(cp)
-                await browser.cookies.set_all(cookies_to_set)
+                await context.add_cookies(cookies)
                 logger.info(f"[AUTH] {len(cookies)} adet cerez basariyla enjekte edildi.")
         except Exception as e:
             logger.error(f"[AUTH HATA] Cerezler enjekte edilirken hata: {e}")
 
-    logger.info(">>> Binomo platformu arka planda yukleniyor...")
-    try:
-        page = await browser.get(BINOMO_URL)
-    except Exception as e:
-        logger.error(f"[GOTO HATA] {e}")
-        page = browser.main_tab
+    async def on_new_page(page):
+        page.on("websocket", attach_ws_listeners)
 
+    context.on("page", on_new_page)
+
+    for page in context.pages:
+        page.on("websocket", attach_ws_listeners)
+
+    page = context.pages[0] if context.pages else await context.new_page()
     active_page = page
 
+    logger.info(">>> Binomo platformu arka planda yukleniyor...")
     try:
-        await page.send(zd.cdp.network.enable())
+        await page.goto(BINOMO_URL, wait_until="domcontentloaded", timeout=60000)
     except Exception as e:
-        logger.error(f"[CDP NETWORK ENABLE HATA] {e}")
+        logger.error(f"[GOTO HATA] {e}")
 
-    async def handle_ws_created(event: zd.cdp.network.WebSocketCreated):
-        ws_url_map[event.request_id] = event.url
-        logger.info(f"[WS BAGLANDI] >>> URL: {event.url}")
-
-    async def handle_ws_frame_received(event: zd.cdp.network.WebSocketFrameReceived):
-        url = ws_url_map.get(event.request_id, "")
-        payload = event.response.payload_data
-        if "as.binomo.com" in url:
-            handle_as_message(payload)
-        elif "binomo.com" in url or "bn." in url or "bnomo" in url.lower():
-            handle_ws_message(payload)
-        else:
-            handle_ws_message(payload)
-
-    page.add_handler(zd.cdp.network.WebSocketCreated, handle_ws_created)
-    page.add_handler(zd.cdp.network.WebSocketFrameReceived, handle_ws_frame_received)
-
-    current_url = page.target.url
+    current_url = page.url
     logger.info(f"[SAYFA URL] Yuklenen sayfa: {current_url}")
 
     if "sign-in" in current_url or "login" in current_url or "auth" in current_url:
@@ -1108,7 +1078,7 @@ async def _launch_browser_session(storage_state):
     else:
         logger.info(f"[LOGIN] Sayfa durumu belirsiz (oturum acilmamis olabilir): {current_url}")
 
-    return browser, page
+    return browser, context, page
 
 
 async def run_collector():
@@ -1123,51 +1093,59 @@ async def run_collector():
         logger.info("[AUTH] auth.json dosyasi bulundu, oturum verileri enjekte edilecek.")
 
     start_time = time.time()
+    # Varsayilan olarak 5 saat 40 dakika (20400 saniye) sonra otomatik kapanir.
+    # Env var ile de degistirilebilir.
     max_run_time = int(os.environ.get("MAX_RUN_TIME_SECONDS", 20400))
     logger.info(f"[BASLANGIC] Maksimum calisme suresi: {max_run_time} saniye ({(max_run_time / 3600):.2f} saat) olarak belirlendi.")
 
-    browser, page = await _launch_browser_session(storage_state)
-    logger.info(">>> WebSocket akisi dinleniyor. Veri toplama aktif! [OK]")
+    async with async_playwright() as pw:
+        browser, context, page = await _launch_browser_session(pw, storage_state)
+        logger.info(">>> WebSocket akisi dinleniyor. Veri toplama aktif! [OK]")
 
-    asyncio.create_task(status_reporter())
-    asyncio.create_task(watchdog_task())
+        asyncio.create_task(status_reporter())
+        asyncio.create_task(watchdog_task())
 
-    while is_running:
-        try:
-            if time.time() - start_time >= max_run_time:
-                logger.info(f"[TIMEOUT] Maksimum calisme suresi doldu ({max_run_time} saniye). Uygulama guvenli sekilde kapatiliyor...")
-                is_running = False
-                break
+        while is_running:
+            try:
+                # Maksimum calisme suresi kontrolu
+                if time.time() - start_time >= max_run_time:
+                    logger.info(f"[TIMEOUT] Maksimum calisme suresi doldu ({max_run_time} saniye). Uygulama guvenli sekilde kapatiliyor...")
+                    is_running = False
+                    break
 
-            if restart_browser:
-                restart_browser = False
-                logger.warning("[RESTART] Tarayici oturumu kapatiliyor, 5 saniye bekleniyor...")
-                try:
-                    await browser.stop()
-                except Exception:
-                    pass
+                if restart_browser:
+                    restart_browser = False
+                    logger.warning("[RESTART] Tarayici oturumu kapatiliyor, 5 saniye bekleniyor...")
+                    try:
+                        await context.close()
+                    except Exception:
+                        pass
+                    try:
+                        await browser.close()
+                    except Exception:
+                        pass
 
+                    await asyncio.sleep(5)
+                    logger.info("[RESTART] Yeni tarayici oturumu baslatiliyor...")
+                    try:
+                        browser, context, page = await _launch_browser_session(pw, storage_state)
+                        last_tick_time = time.time() 
+                        logger.info("[RESTART] Tarayici basariyla yeniden baslatildi. [OK]")
+                    except Exception as e:
+                        logger.error(f"[RESTART HATA] Yeniden baslatilamadi: {e}. 30 saniye sonra tekrar denenecek.")
+                        restart_browser = True  
+                        await asyncio.sleep(30)
+
+                await asyncio.sleep(1)
+
+            except Exception as e:
+                logger.error(f"[COLLECTOR HATA] Ana dongu hatasi: {e}")
                 await asyncio.sleep(5)
-                logger.info("[RESTART] Yeni tarayici oturumu baslatiliyor...")
-                try:
-                    browser, page = await _launch_browser_session(storage_state)
-                    last_tick_time = time.time()
-                    logger.info("[RESTART] Tarayici basariyla yeniden baslatildi. [OK]")
-                except Exception as e:
-                    logger.error(f"[RESTART HATA] Yeniden baslatilamadi: {e}. 30 saniye sonra tekrar denenecek.")
-                    restart_browser = True
-                    await asyncio.sleep(30)
 
-            await asyncio.sleep(1)
-
-        except Exception as e:
-            logger.error(f"[COLLECTOR HATA] Ana dongu hatasi: {e}")
-            await asyncio.sleep(5)
-
-    try:
-        await browser.stop()
-    except Exception:
-        pass
+        try:
+            await context.close()
+        except Exception:
+            pass
 
 def main():
     global is_running
