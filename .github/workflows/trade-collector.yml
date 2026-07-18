@@ -18,14 +18,11 @@ jobs:
         with:
           python-version: "3.10"
 
-      - name: Chrome Kur
-        uses: browser-actions/setup-chrome@v2
-        with:
-          install-dependencies: true
-
       - name: Bağımlılıkları ve Tarayıcıyı Kur
         run: |
-          pip install zendriver colorama
+          pip install playwright colorama
+          playwright install chromium
+          playwright install-deps
 
       - name: Binomo Oturumunu Hazırla
         env:
@@ -40,7 +37,7 @@ jobs:
             touch dataset.csv
           fi
 
-          timeout 21000 xvfb-run -a python -u collector.py 2>&1 | tee bot_output.log
+          timeout 21000 python -u collector.py 2>&1 | tee bot_output.log
           STATUS=${PIPESTATUS[0]}
           if [ $STATUS -ne 0 ] && [ $STATUS -ne 124 ]; then
             echo "Bot Hata ile Sonlandi: $STATUS"
