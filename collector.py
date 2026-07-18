@@ -1014,9 +1014,18 @@ ws_url_map = {}
 async def _launch_browser_session(storage_state):
     global active_page, ws_url_map
 
+    is_ci = os.environ.get("CI") or os.environ.get("GITHUB_ACTIONS")
+    browser_path = None
+    if is_ci:
+        for path in ["/usr/bin/google-chrome", "/opt/google/chrome/chrome"]:
+            if os.path.exists(path):
+                browser_path = path
+                break
+
     browser = await zd.start(
         headless=True,
         sandbox=False,
+        browser_executable_path=browser_path,
         browser_args=[
             "--no-sandbox",
             "--disable-dev-shm-usage",
