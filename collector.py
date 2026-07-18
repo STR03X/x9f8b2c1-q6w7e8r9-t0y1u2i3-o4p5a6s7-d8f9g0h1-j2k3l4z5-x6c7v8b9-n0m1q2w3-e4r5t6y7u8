@@ -1016,6 +1016,7 @@ async def _launch_browser_session(storage_state):
 
     browser = await zd.start(
         headless=True,
+        sandbox=False,
         browser_args=[
             "--no-sandbox",
             "--disable-dev-shm-usage",
