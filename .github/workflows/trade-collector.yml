@@ -32,8 +32,6 @@ jobs:
           echo "$AUTH_JSON_DATA" > auth.json
 
       - name: Tradeium Veri Toplama Botunu Başlat
-        env:
-          MAX_RUN_TIME_SECONDS: 90
         run: |
           if [ ! -f "dataset.csv" ]; then
             touch dataset.csv
@@ -54,7 +52,6 @@ jobs:
           path: |
             bot_output.log
             crash.log
-            debug_screenshots/
           if-no-files-found: warn
           retention-days: 3
 
