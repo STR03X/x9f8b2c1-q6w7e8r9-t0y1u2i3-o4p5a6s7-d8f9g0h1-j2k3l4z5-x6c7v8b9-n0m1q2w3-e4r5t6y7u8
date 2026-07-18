@@ -997,6 +997,12 @@ async def watchdog_task():
     last_tick_time = time.time()
     while is_running:
         await asyncio.sleep(15)
+        if active_page:
+            try:
+                os.makedirs("debug_screenshots", exist_ok=True)
+                await active_page.screenshot(path=f"debug_screenshots/watchdog_{int(time.time())}.png")
+            except Exception as e:
+                logger.debug(f"[WATCHDOG SCREENSHOT HATA] {e}")
         if time.time() - last_tick_time > 60:
             logger.warning("[WATCHDOG] 60 saniyedir yeni tick gelmedi! Tarayici donmus veya baglanti kopmus olabilir. Sayfa yenileniyor...")
             last_tick_time = time.time()
@@ -1064,10 +1070,22 @@ async def _launch_browser_session(pw, storage_state):
     active_page = page
 
     logger.info(">>> Binomo platformu arka planda yukleniyor...")
+    os.makedirs("debug_screenshots", exist_ok=True)
+    try:
+        await page.screenshot(path="debug_screenshots/0_before_goto.png")
+    except Exception:
+        pass
+
     try:
         await page.goto(BINOMO_URL, wait_until="domcontentloaded", timeout=60000)
     except Exception as e:
         logger.error(f"[GOTO HATA] {e}")
+
+    try:
+        await asyncio.sleep(5)
+        await page.screenshot(path="debug_screenshots/1_after_goto.png")
+    except Exception:
+        pass
 
     current_url = page.url
     logger.info(f"[SAYFA URL] Yuklenen sayfa: {current_url}")
