@@ -1027,7 +1027,7 @@ async def _launch_browser_session(pw, storage_state):
     global active_page
 
     browser = await pw.chromium.launch(
-        headless=False,
+        headless=True,
         args=[
             "--no-sandbox",
             "--disable-dev-shm-usage",
