@@ -20,9 +20,7 @@ jobs:
 
       - name: Bağımlılıkları ve Tarayıcıyı Kur
         run: |
-          pip install playwright colorama
-          playwright install chromium
-          playwright install-deps
+          pip install zendriver colorama
 
       - name: Binomo Oturumunu Hazırla
         env:
