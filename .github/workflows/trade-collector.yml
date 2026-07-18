@@ -40,7 +40,7 @@ jobs:
             touch dataset.csv
           fi
 
-          timeout 21000 python -u collector.py 2>&1 | tee bot_output.log
+          timeout 21000 xvfb-run -a python -u collector.py 2>&1 | tee bot_output.log
           STATUS=${PIPESTATUS[0]}
           if [ $STATUS -ne 0 ] && [ $STATUS -ne 124 ]; then
             echo "Bot Hata ile Sonlandi: $STATUS"
