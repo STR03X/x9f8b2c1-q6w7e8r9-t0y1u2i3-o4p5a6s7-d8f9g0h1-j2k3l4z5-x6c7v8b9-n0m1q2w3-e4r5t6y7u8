@@ -1106,9 +1106,10 @@ async def guvenlik_kontrolu(page, wait_seconds=12) -> bool:
 
             rect = await page.evaluate(f"""
                 (function() {{
-                    let el = document.getElementById('{cf_id}');
-                    if (!el) return null;
-                    let r = el.getBoundingClientRect();
+                    let iframe = document.querySelector('iframe[src*="challenges.cloudflare.com"]');
+                    let target = iframe || document.getElementById('{cf_id}');
+                    if (!target) return null;
+                    let r = target.getBoundingClientRect();
                     return [r.x, r.y, r.width, r.height];
                 }})()
             """)
@@ -1118,7 +1119,6 @@ async def guvenlik_kontrolu(page, wait_seconds=12) -> bool:
                 await asyncio.sleep(2)
                 continue
 
-            # nodriver / zendriver evaluate çıktısı dict gelebilir
             def get_val(item):
                 if isinstance(item, dict) and 'value' in item:
                     return item['value']
@@ -1128,7 +1128,7 @@ async def guvenlik_kontrolu(page, wait_seconds=12) -> bool:
             y_coord = get_val(rect[1])
             h_coord = get_val(rect[3])
 
-            x = int(x_coord + 20)
+            x = int(x_coord + 35)
             y = int(y_coord + h_coord / 2)
 
             await page.send(cdp_input.dispatch_mouse_event(
@@ -1152,18 +1152,24 @@ async def guvenlik_kontrolu(page, wait_seconds=12) -> bool:
                 turnstile_response_dolu = await page.evaluate("""
                     () => {
                         let input = document.querySelector('input[name="cf-turnstile-response"]');
-                        return !!(input && input.value.length > 0);
+                        return !!(input && input.value && input.value.length > 0);
                     }
                 """)
 
                 cf_element_kayboldu_mu = await page.evaluate(f"""
                     () => {{
                         let el = document.getElementById('{cf_id}');
-                        return !el || el.offsetWidth === 0 || el.offsetHeight === 0 || window.getComputedStyle(el).display === 'none' || window.getComputedStyle(el).visibility === 'hidden';
+                        if (!el) return true;
+                        let style = window.getComputedStyle(el);
+                        return el.offsetWidth === 0 || el.offsetHeight === 0 || style.display === 'none' || style.visibility === 'hidden';
                     }}
                 """)
 
-                if turnstile_response_dolu or cf_element_kayboldu_mu:
+                url_changed = await page.evaluate("""
+                    () => !window.location.href.includes('__cf_chl_rt_tk')
+                """)
+
+                if turnstile_response_dolu or cf_element_kayboldu_mu or url_changed:
                     logger.info("Cloudflare Turnstile başarıyla geçildi ve doğrulandı.")
                     _last_cf_solve_time = time.time()
                     await asyncio.sleep(3)
