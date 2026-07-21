@@ -56,6 +56,8 @@ restart_browser = False
 session_range_coefficient = 1.0
 
 pending_rows = []
+_cf_bypass_running = False
+_last_cf_solve_time = 0.0
 CSV_PATH = "dataset.csv"
 
 CSV_HEADERS = [
@@ -1004,6 +1006,10 @@ async def watchdog_task():
                 try:
                     await active_page.reload(wait_until="domcontentloaded", timeout=60000)
                     logger.info("[WATCHDOG] Sayfa basariyla yenilendi.")
+                    cf_id = await _cloudflare_id_bul(active_page)
+                    if cf_id:
+                        logger.info("[WATCHDOG CLOUDFLARE] Cloudflare Turnstile detected after reload, attempting to bypass...")
+                        await guvenlik_kontrolu(active_page)
                 except Exception as e:
                     logger.error(f"[WATCHDOG HATA] Sayfa yenilenirken hata olustu (tarayici tamamen cokmus olabilir): {e}")
                     logger.warning("[WATCHDOG] Tarayici yeniden baslatma sinyali gonderiliyor...")
@@ -1023,11 +1029,125 @@ def attach_ws_listeners(ws):
         ws.on("framereceived", lambda p: handle_ws_message(p))
     ws.on("close", lambda: logger.info(f"[WS KAPANDI] {url}"))
 
+async def _cloudflare_id_bul(page) -> str:
+    try:
+        cf_id = await page.evaluate("""
+            (function() {
+                let iframe = document.querySelector('iframe[src*="challenges.cloudflare.com"]');
+                if (iframe) {
+                    let parent = iframe.parentElement;
+                    while (parent && parent !== document.body) {
+                        if (parent.tagName === 'DIV' && parent.id) {
+                            return parent.id;
+                        }
+                        parent = parent.parentElement;
+                    }
+                }
+                let input = document.querySelector('input[name="cf-turnstile-response"]');
+                if (input) {
+                    let parent = input.parentElement;
+                    while (parent && parent !== document.body) {
+                        if (parent.tagName === 'DIV' && parent.id) {
+                            return parent.id;
+                        }
+                        parent = parent.parentElement;
+                    }
+                }
+                return null;
+            })()
+        """)
+        if cf_id:
+            logger.info(f"Dinamik Cloudflare ID tespit edildi: {cf_id}")
+        return cf_id
+    except Exception as e:
+        logger.error(f"Cloudflare ID bulma hatası: {e}")
+        return None
+
+async def guvenlik_kontrolu(page) -> bool:
+    global _cf_bypass_running, _last_cf_solve_time
+    if _cf_bypass_running:
+        return False
+
+    cf_id = await _cloudflare_id_bul(page)
+    if not cf_id:
+        return False
+
+    import time
+    if time.time() - _last_cf_solve_time < 15:
+        return False
+
+    _cf_bypass_running = True
+    try:
+        await page.evaluate("""
+            let input = document.querySelector('input[name="cf-turnstile-response"]');
+            if (input) input.value = "";
+        """)
+
+        logger.info("Cloudflare Turnstile tespit edildi, bypass mekanizması başlatılıyor.")
+
+        max_deneme = 3
+        deneme = 0
+        while deneme < max_deneme:
+            deneme += 1
+            logger.info(f"Cloudflare bypass denemesi: {deneme}/{max_deneme}")
+
+            rect = await page.evaluate(f"""
+                (function() {{
+                    let el = document.getElementById('{cf_id}');
+                    if (!el) return null;
+                    let r = el.getBoundingClientRect();
+                    return [r.x, r.y, r.width, r.height];
+                }})()
+            """)
+
+            if not rect or not isinstance(rect, list) or len(rect) < 4:
+                logger.warning("Cloudflare Turnstile koordinatları alınamadı.")
+                await asyncio.sleep(2)
+                continue
+
+            x = int(rect[0] + 20)
+            y = int(rect[1] + rect[3] / 2)
+
+            await page.mouse.move(x, y)
+            await asyncio.sleep(0.3)
+            await page.mouse.click(x, y)
+            logger.info("Cloudflare checkbox'ına tıklandı (Playwright mouse).")
+
+            start_time = time.time()
+            timeout = 15
+            while time.time() - start_time < timeout:
+                await asyncio.sleep(2)
+
+                turnstile_response_dolu = await page.evaluate("""
+                    let input = document.querySelector('input[name="cf-turnstile-response"]');
+                    return !!(input && input.value.length > 0);
+                """)
+
+                cf_element_kayboldu_mu = await page.evaluate(f"""
+                    (function() {{
+                        let el = document.getElementById('{cf_id}');
+                        return !el || el.offsetWidth === 0 || el.offsetHeight === 0 || window.getComputedStyle(el).display === 'none' || window.getComputedStyle(el).visibility === 'hidden';
+                    }})()
+                """)
+
+                if turnstile_response_dolu or cf_element_kayboldu_mu:
+                    logger.info("Cloudflare Turnstile başarıyla geçildi ve doğrulandı.")
+                    _last_cf_solve_time = time.time()
+                    await asyncio.sleep(3)
+                    return True
+
+            logger.warning(f"Cloudflare doğrulama {timeout} saniye içinde tamamlanamadı.")
+
+        logger.error(f"Cloudflare Turnstile {max_deneme} denemede de geçilemedi.")
+        return False
+    finally:
+        _cf_bypass_running = False
+
 async def _launch_browser_session(pw, storage_state):
     global active_page
 
     browser = await pw.chromium.launch(
-        headless=True,
+        headless=False,
         args=[
             "--no-sandbox",
             "--disable-dev-shm-usage",
@@ -1068,6 +1188,11 @@ async def _launch_browser_session(pw, storage_state):
         await page.goto(BINOMO_URL, wait_until="domcontentloaded", timeout=60000)
     except Exception as e:
         logger.error(f"[GOTO HATA] {e}")
+
+    cf_id = await _cloudflare_id_bul(page)
+    if cf_id:
+        logger.info("[CLOUDFLARE] Cloudflare Turnstile challenge detected on page load, attempting to bypass...")
+        await guvenlik_kontrolu(page)
 
     current_url = page.url
     logger.info(f"[SAYFA URL] Yuklenen sayfa: {current_url}")
