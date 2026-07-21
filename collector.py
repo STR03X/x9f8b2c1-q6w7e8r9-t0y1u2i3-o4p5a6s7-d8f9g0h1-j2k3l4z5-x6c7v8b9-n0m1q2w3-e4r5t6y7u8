@@ -1204,22 +1204,17 @@ async def _launch_browser_session(storage_state):
     global active_page
 
     user_data_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "browser_data")
-    chrome_path = "/usr/bin/google-chrome" if os.path.exists("/usr/bin/google-chrome") else None
-    start_kwargs = {
-        "headless": False,
-        "sandbox": False,
-        "browser_args": [
-            "--window-size=1280,800",
+    is_ci = bool(os.environ.get("CI") or os.environ.get("GITHUB_ACTIONS"))
+    browser = await uc.start(
+        headless=False if not is_ci else True,
+        sandbox=False,
+        browser_args=[
             "--no-sandbox",
             "--disable-setuid-sandbox",
             "--disable-dev-shm-usage",
             f"--user-data-dir={user_data_dir}"
         ]
-    }
-    if chrome_path:
-        start_kwargs["browser_executable_path"] = chrome_path
-
-    browser = await uc.start(**start_kwargs)
+    )
 
     page = browser.main_tab
     active_page = page
