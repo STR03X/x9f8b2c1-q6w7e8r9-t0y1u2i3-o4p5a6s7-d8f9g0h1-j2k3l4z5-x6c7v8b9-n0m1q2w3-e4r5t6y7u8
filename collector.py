@@ -1106,10 +1106,13 @@ async def guvenlik_kontrolu(page, wait_seconds=12) -> bool:
 
             rect = await page.evaluate(f"""
                 (function() {{
-                    let iframe = document.querySelector('iframe[src*="challenges.cloudflare.com"]');
-                    let target = iframe || document.getElementById('{cf_id}');
-                    if (!target) return null;
-                    let r = target.getBoundingClientRect();
+                    let el = document.getElementById('{cf_id}');
+                    if (!el) {{
+                        let iframe = document.querySelector('iframe[src*="challenges.cloudflare.com"]');
+                        if (iframe) el = iframe;
+                    }}
+                    if (!el) return null;
+                    let r = el.getBoundingClientRect();
                     return [r.x, r.y, r.width, r.height];
                 }})()
             """)
@@ -1126,9 +1129,10 @@ async def guvenlik_kontrolu(page, wait_seconds=12) -> bool:
 
             x_coord = get_val(rect[0])
             y_coord = get_val(rect[1])
+            w_coord = get_val(rect[2])
             h_coord = get_val(rect[3])
 
-            x = int(x_coord + 35)
+            x = int(x_coord + 20)
             y = int(y_coord + h_coord / 2)
 
             await page.send(cdp_input.dispatch_mouse_event(
