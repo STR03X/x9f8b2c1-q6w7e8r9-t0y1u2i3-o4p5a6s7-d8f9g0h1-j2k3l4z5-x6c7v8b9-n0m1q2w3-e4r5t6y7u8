@@ -1206,6 +1206,7 @@ async def _launch_browser_session(storage_state):
     user_data_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "browser_data")
     browser = await uc.start(
         headless=False,
+        sandbox=False,
         browser_args=[
             "--window-size=1280,800",
             "--no-sandbox",
