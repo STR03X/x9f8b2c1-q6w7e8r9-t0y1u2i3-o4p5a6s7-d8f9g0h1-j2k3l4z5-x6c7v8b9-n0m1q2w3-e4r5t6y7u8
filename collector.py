@@ -1216,7 +1216,14 @@ async def _launch_browser_session(pw, storage_state):
     except Exception as e:
         logger.error(f"[GOTO HATA] {e}")
 
-    await guvenlik_kontrolu(page, wait_seconds=12)
+    bypass_result = await guvenlik_kontrolu(page, wait_seconds=12)
+    if bypass_result:
+        logger.info("[CLOUDFLARE] Cloudflare Turnstile gecildi. Platformun WebSocket akisini baslatmasi icin sayfa yenileniyor...")
+        try:
+            await page.reload(wait_until="domcontentloaded", timeout=60000)
+            await asyncio.sleep(3)
+        except Exception as e:
+            logger.error(f"[RELOAD HATA] {e}")
 
     current_url = page.url
     logger.info(f"[SAYFA URL] Yuklenen sayfa: {current_url}")
