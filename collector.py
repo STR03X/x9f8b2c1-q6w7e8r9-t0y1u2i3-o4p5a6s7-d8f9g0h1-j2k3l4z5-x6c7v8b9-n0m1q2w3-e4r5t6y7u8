@@ -1200,10 +1200,13 @@ async def _launch_browser_session(storage_state):
     user_data_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "browser_data")
     browser = await uc.start(
         headless=False,
+        sandbox=False,
         browser_args=[
             "--no-sandbox",
             "--disable-dev-shm-usage",
             "--disable-setuid-sandbox",
+            "--disable-gpu",
+            "--remote-debugging-port=9222",
             f"--user-data-dir={user_data_dir}",
             "--window-size=1280,800"
         ]
