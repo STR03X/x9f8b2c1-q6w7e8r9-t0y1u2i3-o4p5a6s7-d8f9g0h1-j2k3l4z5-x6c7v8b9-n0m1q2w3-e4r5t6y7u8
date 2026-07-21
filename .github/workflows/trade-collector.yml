@@ -22,7 +22,10 @@ jobs:
         run: |
           pip install zendriver colorama
           sudo apt-get update
-          sudo apt-get install -y google-chrome-stable || true
+          sudo apt-get install -y google-chrome-stable
+          if [ ! -f /bin/chromium ]; then
+            sudo ln -s /usr/bin/google-chrome /bin/chromium || true
+          fi
 
       - name: Binomo Oturumunu Hazırla
         env:
