@@ -1135,6 +1135,7 @@ async def guvenlik_kontrolu(page, wait_seconds=12) -> bool:
             x = int(x_coord + 20)
             y = int(y_coord + h_coord / 2)
 
+            # 1. CDP mouse event ile tıklama
             await page.send(cdp_input.dispatch_mouse_event(
                 type_='mouseMoved', x=x, y=y, button=cdp_input.MouseButton.NONE
             ))
@@ -1146,6 +1147,20 @@ async def guvenlik_kontrolu(page, wait_seconds=12) -> bool:
             await page.send(cdp_input.dispatch_mouse_event(
                 type_='mouseReleased', x=x, y=y, button=cdp_input.MouseButton.LEFT, click_count=1
             ))
+            
+            # 2. JS click yedek tetikleme
+            try:
+                await page.evaluate(f"""
+                    () => {{
+                        let el = document.getElementById('{cf_id}');
+                        if (el) el.click();
+                        let iframe = document.querySelector('iframe[src*="challenges.cloudflare.com"]');
+                        if (iframe) iframe.click();
+                    }}
+                """)
+            except Exception:
+                pass
+
             logger.info(f"Cloudflare checkbox'ına tıklandı (CDP mouse: x={x}, y={y}).")
 
             start_time = time.time()
@@ -1208,11 +1223,11 @@ async def _launch_browser_session(storage_state):
     global active_page
 
     user_data_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "browser_data")
-    is_ci = bool(os.environ.get("CI") or os.environ.get("GITHUB_ACTIONS"))
     browser = await uc.start(
-        headless=False if not is_ci else True,
+        headless=False,
         sandbox=False,
         browser_args=[
+            "--window-size=1280,800",
             "--no-sandbox",
             "--disable-setuid-sandbox",
             "--disable-dev-shm-usage",
