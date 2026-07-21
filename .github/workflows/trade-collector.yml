@@ -23,9 +23,8 @@ jobs:
           pip install zendriver colorama
           sudo apt-get update
           sudo apt-get install -y google-chrome-stable
-          sudo rm -f /bin/chromium /usr/bin/chromium || true
-          sudo ln -s $(which google-chrome-stable) /bin/chromium
-          sudo ln -s $(which google-chrome-stable) /usr/bin/chromium
+          sudo ln -sf $(which google-chrome-stable) /bin/chromium
+          sudo ln -sf $(which google-chrome-stable) /usr/bin/chromium
 
       - name: Binomo Oturumunu Hazırla
         env:
