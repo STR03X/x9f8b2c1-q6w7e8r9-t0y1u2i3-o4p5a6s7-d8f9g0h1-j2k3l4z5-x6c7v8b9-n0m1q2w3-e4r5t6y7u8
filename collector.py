@@ -1104,8 +1104,10 @@ async def guvenlik_kontrolu(page, wait_seconds=12) -> bool:
         logger.info(f"[CLOUDFLARE] Cloudflare Turnstile tespit edildi (ID: {cf_id}), bypass mekanizması başlatılıyor.")
 
         await page.evaluate("""
-            let input = document.querySelector('input[name="cf-turnstile-response"]');
-            if (input) input.value = "";
+            () => {
+                let input = document.querySelector('input[name="cf-turnstile-response"]');
+                if (input) input.value = "";
+            }
         """)
 
         max_deneme = 3
@@ -1142,15 +1144,17 @@ async def guvenlik_kontrolu(page, wait_seconds=12) -> bool:
                 await asyncio.sleep(2)
 
                 turnstile_response_dolu = await page.evaluate("""
-                    let input = document.querySelector('input[name="cf-turnstile-response"]');
-                    return !!(input && input.value.length > 0);
+                    () => {
+                        let input = document.querySelector('input[name="cf-turnstile-response"]');
+                        return !!(input && input.value.length > 0);
+                    }
                 """)
 
                 cf_element_kayboldu_mu = await page.evaluate(f"""
-                    (function() {{
+                    () => {{
                         let el = document.getElementById('{cf_id}');
                         return !el || el.offsetWidth === 0 || el.offsetHeight === 0 || window.getComputedStyle(el).display === 'none' || window.getComputedStyle(el).visibility === 'hidden';
-                    }})()
+                    }}
                 """)
 
                 if turnstile_response_dolu or cf_element_kayboldu_mu:
