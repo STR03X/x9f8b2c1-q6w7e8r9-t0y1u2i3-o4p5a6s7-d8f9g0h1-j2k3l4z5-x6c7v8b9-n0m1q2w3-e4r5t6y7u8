@@ -8,9 +8,7 @@ import sys
 from datetime import datetime, timezone
 from collections import deque
 from typing import Any
-import zendriver as uc
-import zendriver.cdp.input_ as cdp_input
-import zendriver.cdp.network as cdp_network
+from playwright.async_api import async_playwright
 
 crash_handler = logging.FileHandler("crash.log", encoding="utf-8", delay=True)
 crash_handler.setLevel(logging.WARNING)
@@ -58,8 +56,6 @@ restart_browser = False
 session_range_coefficient = 1.0
 
 pending_rows = []
-_cf_bypass_running = False
-_last_cf_solve_time = 0.0
 CSV_PATH = "dataset.csv"
 
 CSV_HEADERS = [
@@ -1006,240 +1002,44 @@ async def watchdog_task():
             last_tick_time = time.time()
             if active_page:
                 try:
-                    await active_page.reload()
+                    await active_page.reload(wait_until="domcontentloaded", timeout=60000)
                     logger.info("[WATCHDOG] Sayfa basariyla yenilendi.")
-                    await guvenlik_kontrolu(active_page, wait_seconds=10)
                 except Exception as e:
                     logger.error(f"[WATCHDOG HATA] Sayfa yenilenirken hata olustu (tarayici tamamen cokmus olabilir): {e}")
                     logger.warning("[WATCHDOG] Tarayici yeniden baslatma sinyali gonderiliyor...")
                     restart_browser = True
 
-async def _cloudflare_id_bul(page) -> str:
-    try:
-        cf_id = await page.evaluate("""
-            (function() {
-                let iframe = document.querySelector('iframe[src*="challenges.cloudflare.com"]');
-                if (iframe) {
-                    let parent = iframe.parentElement;
-                    while (parent && parent !== document.body) {
-                        if (parent.tagName === 'DIV') {
-                            if (!parent.id) {
-                                parent.id = 'cf-turnstile-auto-' + Math.floor(Math.random() * 1000000);
-                            }
-                            return parent.id;
-                        }
-                        parent = parent.parentElement;
-                    }
-                    if (!iframe.id) {
-                        iframe.id = 'cf-iframe-auto-' + Math.floor(Math.random() * 1000000);
-                    }
-                    return iframe.id;
-                }
-                let input = document.querySelector('input[name="cf-turnstile-response"]');
-                if (input) {
-                    let parent = input.parentElement;
-                    while (parent && parent !== document.body) {
-                        if (parent.tagName === 'DIV') {
-                            if (!parent.id) {
-                                parent.id = 'cf-turnstile-auto-' + Math.floor(Math.random() * 1000000);
-                            }
-                            return parent.id;
-                        }
-                        parent = parent.parentElement;
-                    }
-                }
-                let turnstileEl = document.querySelector('.cf-turnstile, #cf-turnstile, [class*="turnstile"]');
-                if (turnstileEl) {
-                    if (!turnstileEl.id) {
-                        turnstileEl.id = 'cf-turnstile-auto-' + Math.floor(Math.random() * 1000000);
-                    }
-                    return turnstileEl.id;
-                }
-                return null;
-            })()
-        """)
-        if cf_id:
-            logger.info(f"Dinamik Cloudflare ID tespit edildi: {cf_id}")
-        return cf_id
-    except Exception as e:
-        logger.error(f"Cloudflare ID bulma hatası: {e}")
-        return None
-
-async def guvenlik_kontrolu(page, wait_seconds=12) -> bool:
-    global _cf_bypass_running, _last_cf_solve_time
-    if _cf_bypass_running:
-        return False
-
-    import time
-    if time.time() - _last_cf_solve_time < 10:
-        return False
-
-    _cf_bypass_running = True
-    try:
-        logger.info(f"[CLOUDFLARE] Cloudflare Turnstile kontrol ediliyor (azami {wait_seconds}s bekleniyor)...")
-        start_wait = time.time()
-        cf_id = None
-        while time.time() - start_wait < wait_seconds:
-            cf_id = await _cloudflare_id_bul(page)
-            if cf_id:
-                break
-            await asyncio.sleep(1.0)
-
-        if not cf_id:
-            logger.info("[CLOUDFLARE] Cloudflare Turnstile elementi bulunamadı (Sayfa temiz).")
-            return False
-
-        logger.info(f"[CLOUDFLARE] Cloudflare Turnstile tespit edildi (ID: {cf_id}), bypass mekanizması başlatılıyor.")
-
-        await page.evaluate("""
-            () => {
-                let input = document.querySelector('input[name="cf-turnstile-response"]');
-                if (input) input.value = "";
-            }
-        """)
-
-        max_deneme = 3
-        deneme = 0
-        while deneme < max_deneme:
-            deneme += 1
-            logger.info(f"Cloudflare bypass denemesi: {deneme}/{max_deneme}")
-
-            rect = await page.evaluate(f"""
-                (function() {{
-                    let el = document.getElementById('{cf_id}');
-                    if (!el) {{
-                        let iframe = document.querySelector('iframe[src*="challenges.cloudflare.com"]');
-                        if (iframe) el = iframe;
-                    }}
-                    if (!el) return null;
-                    let r = el.getBoundingClientRect();
-                    return [r.x, r.y, r.width, r.height];
-                }})()
-            """)
-
-            if not rect or not isinstance(rect, list) or len(rect) < 4 or rect[2] == 0 or rect[3] == 0:
-                logger.warning(f"Cloudflare Turnstile koordinatları alınamadı (Deneme {deneme}).")
-                await asyncio.sleep(2)
-                continue
-
-            def get_val(item):
-                if isinstance(item, dict) and 'value' in item:
-                    return item['value']
-                return item
-
-            x_coord = get_val(rect[0])
-            y_coord = get_val(rect[1])
-            w_coord = get_val(rect[2])
-            h_coord = get_val(rect[3])
-
-            x = int(x_coord + 20)
-            y = int(y_coord + h_coord / 2)
-
-            # 1. CDP mouse event ile tıklama
-            await page.send(cdp_input.dispatch_mouse_event(
-                type_='mouseMoved', x=x, y=y, button=cdp_input.MouseButton.NONE
-            ))
-            await asyncio.sleep(0.3)
-            await page.send(cdp_input.dispatch_mouse_event(
-                type_='mousePressed', x=x, y=y, button=cdp_input.MouseButton.LEFT, click_count=1
-            ))
-            await asyncio.sleep(0.1)
-            await page.send(cdp_input.dispatch_mouse_event(
-                type_='mouseReleased', x=x, y=y, button=cdp_input.MouseButton.LEFT, click_count=1
-            ))
-            
-            # 2. JS click yedek tetikleme
-            try:
-                await page.evaluate(f"""
-                    () => {{
-                        let el = document.getElementById('{cf_id}');
-                        if (el) el.click();
-                        let iframe = document.querySelector('iframe[src*="challenges.cloudflare.com"]');
-                        if (iframe) iframe.click();
-                    }}
-                """)
-            except Exception:
-                pass
-
-            logger.info(f"Cloudflare checkbox'ına tıklandı (CDP mouse: x={x}, y={y}).")
-
-            start_time = time.time()
-            timeout = 15
-            while time.time() - start_time < timeout:
-                await asyncio.sleep(2)
-
-                turnstile_response_dolu = await page.evaluate("""
-                    () => {
-                        let input = document.querySelector('input[name="cf-turnstile-response"]');
-                        return !!(input && input.value && input.value.length > 0);
-                    }
-                """)
-
-                cf_element_kayboldu_mu = await page.evaluate(f"""
-                    () => {{
-                        let el = document.getElementById('{cf_id}');
-                        if (!el) return true;
-                        let style = window.getComputedStyle(el);
-                        return el.offsetWidth === 0 || el.offsetHeight === 0 || style.display === 'none' || style.visibility === 'hidden';
-                    }}
-                """)
-
-                url_changed = await page.evaluate("""
-                    () => !window.location.href.includes('__cf_chl_rt_tk')
-                """)
-
-                if turnstile_response_dolu or cf_element_kayboldu_mu or url_changed:
-                    logger.info("Cloudflare Turnstile başarıyla geçildi ve doğrulandı.")
-                    _last_cf_solve_time = time.time()
-                    await asyncio.sleep(3)
-                    return True
-
-            logger.warning(f"Cloudflare doğrulama {timeout} saniye içinde tamamlanamadı.")
-
-        logger.error(f"Cloudflare Turnstile {max_deneme} denemede de geçilemedi.")
-        return False
-    finally:
-        _cf_bypass_running = False
-
-ws_connection_urls = {}
-
-def on_ws_created(event: cdp_network.WebSocketCreated):
-    ws_connection_urls[event.request_id] = event.url
-    logger.info(f"[WS TESPIT EDILDI] RequestID: {event.request_id} | URL: {event.url}")
-    if "as.binomo.com" in event.url:
-        logger.info("[WS] Fiyat akisi (as.binomo.com) baglandi!")
-    elif "binomo.com" in event.url or "bn." in event.url:
-        logger.info(f"[WS] Genel Binomo WS baglandi: {event.url}")
-
-def on_ws_frame_received(event: cdp_network.WebSocketFrameReceived):
-    payload = event.response.payload_data
-    url = ws_connection_urls.get(event.request_id, "")
+def attach_ws_listeners(ws):
+    url = ws.url
+    logger.info(f"[WS BAGLANDI] >>> URL: {url}")
     if "as.binomo.com" in url:
-        handle_as_message(payload)
+        logger.info(f"[WS] Fiyat akisi (as.binomo.com) baglandi!")
+        ws.on("framereceived", lambda p: handle_as_message(p))
+    elif "binomo.com" in url or "bn." in url or "bnomo" in url.lower():
+        logger.info(f"[WS] Genel Binomo WS baglandi: {url}")
+        ws.on("framereceived", lambda p: handle_ws_message(p))
     else:
-        handle_ws_message(payload)
+        logger.info(f"[WS] Bilinmeyen WS (dinleniyor): {url}")
+        ws.on("framereceived", lambda p: handle_ws_message(p))
+    ws.on("close", lambda: logger.info(f"[WS KAPANDI] {url}"))
 
-async def _launch_browser_session(storage_state):
+async def _launch_browser_session(pw, storage_state):
     global active_page
 
-    user_data_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "browser_data")
-    browser = await uc.start(
-        headless=False,
-        sandbox=False,
-        browser_args=[
-            "--window-size=1280,800",
+    browser = await pw.chromium.launch(
+        headless=True,
+        args=[
             "--no-sandbox",
-            "--disable-setuid-sandbox",
             "--disable-dev-shm-usage",
-            f"--user-data-dir={user_data_dir}"
+            "--disable-blink-features=AutomationControlled",
+            "--disable-setuid-sandbox",
         ]
     )
-
-    page = browser.main_tab
-    active_page = page
-
-    page.add_handler(cdp_network.WebSocketCreated, on_ws_created)
-    page.add_handler(cdp_network.WebSocketFrameReceived, on_ws_frame_received)
+    context = await browser.new_context(
+        ignore_https_errors=True,
+        viewport={"width": 1280, "height": 800},
+        user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+    )
 
     if storage_state:
         try:
@@ -1247,46 +1047,40 @@ async def _launch_browser_session(storage_state):
                 state = json.load(f)
             cookies = state.get("cookies", [])
             if cookies:
-                for c in cookies:
-                    try:
-                        name = c.get("name")
-                        value = c.get("value")
-                        domain = c.get("domain")
-                        if name and value:
-                            await page.send(cdp_network.set_cookie(name=name, value=value, domain=domain))
-                    except Exception:
-                        pass
+                await context.add_cookies(cookies)
                 logger.info(f"[AUTH] {len(cookies)} adet cerez basariyla enjekte edildi.")
         except Exception as e:
             logger.error(f"[AUTH HATA] Cerezler enjekte edilirken hata: {e}")
 
+    async def on_new_page(page):
+        page.on("websocket", attach_ws_listeners)
+
+    context.on("page", on_new_page)
+
+    for page in context.pages:
+        page.on("websocket", attach_ws_listeners)
+
+    page = context.pages[0] if context.pages else await context.new_page()
+    active_page = page
+
     logger.info(">>> Binomo platformu arka planda yukleniyor...")
     try:
-        page = await browser.get(BINOMO_URL)
-        active_page = page
+        await page.goto(BINOMO_URL, wait_until="domcontentloaded", timeout=60000)
     except Exception as e:
         logger.error(f"[GOTO HATA] {e}")
 
-    bypass_result = await guvenlik_kontrolu(page, wait_seconds=12)
-    if bypass_result:
-        logger.info("[CLOUDFLARE] Cloudflare Turnstile gecildi. Platformun WebSocket akisini baslatmasi icin sayfa yenileniyor...")
-        try:
-            await page.reload()
-            await asyncio.sleep(3)
-        except Exception as e:
-            logger.error(f"[RELOAD HATA] {e}")
-
-    current_url = getattr(page, 'url', BINOMO_URL)
+    current_url = page.url
     logger.info(f"[SAYFA URL] Yuklenen sayfa: {current_url}")
 
-    if "sign-in" in str(current_url) or "login" in str(current_url) or "auth" in str(current_url):
+    if "sign-in" in current_url or "login" in current_url or "auth" in current_url:
         logger.warning("[LOGIN] UYARI: Sayfa login sayfasina yonlendirdi! auth.json veya profil gecersiz olmis olabilir.")
-    elif "trade" in str(current_url):
+    elif "trade" in current_url:
         logger.info("[LOGIN] Sayfa trading platformunda gorünüyor. [OK]")
     else:
         logger.info(f"[LOGIN] Sayfa durumu belirsiz (oturum acilmamis olabilir): {current_url}")
 
-    return browser, page
+    return browser, context, page
+
 
 async def run_collector():
     global restart_browser, last_tick_time, is_running
@@ -1300,51 +1094,59 @@ async def run_collector():
         logger.info("[AUTH] auth.json dosyasi bulundu, oturum verileri enjekte edilecek.")
 
     start_time = time.time()
+    # Varsayilan olarak 5 saat 40 dakika (20400 saniye) sonra otomatik kapanir.
+    # Env var ile de degistirilebilir.
     max_run_time = int(os.environ.get("MAX_RUN_TIME_SECONDS", 20400))
     logger.info(f"[BASLANGIC] Maksimum calisme suresi: {max_run_time} saniye ({(max_run_time / 3600):.2f} saat) olarak belirlendi.")
 
-    browser, page = await _launch_browser_session(storage_state)
-    logger.info(">>> WebSocket akisi dinleniyor. Veri toplama aktif! [OK]")
+    async with async_playwright() as pw:
+        browser, context, page = await _launch_browser_session(pw, storage_state)
+        logger.info(">>> WebSocket akisi dinleniyor. Veri toplama aktif! [OK]")
 
-    asyncio.create_task(status_reporter())
-    asyncio.create_task(watchdog_task())
+        asyncio.create_task(status_reporter())
+        asyncio.create_task(watchdog_task())
 
-    while is_running:
-        try:
-            if time.time() - start_time >= max_run_time:
-                logger.info(f"[TIMEOUT] Maksimum calisme suresi doldu ({max_run_time} saniye). Uygulama guvenli sekilde kapatiliyor...")
-                is_running = False
-                break
+        while is_running:
+            try:
+                # Maksimum calisme suresi kontrolu
+                if time.time() - start_time >= max_run_time:
+                    logger.info(f"[TIMEOUT] Maksimum calisme suresi doldu ({max_run_time} saniye). Uygulama guvenli sekilde kapatiliyor...")
+                    is_running = False
+                    break
 
-            if restart_browser:
-                restart_browser = False
-                logger.warning("[RESTART] Tarayici oturumu kapatiliyor, 5 saniye bekleniyor...")
-                try:
-                    await browser.stop()
-                except Exception:
-                    pass
+                if restart_browser:
+                    restart_browser = False
+                    logger.warning("[RESTART] Tarayici oturumu kapatiliyor, 5 saniye bekleniyor...")
+                    try:
+                        await context.close()
+                    except Exception:
+                        pass
+                    try:
+                        await browser.close()
+                    except Exception:
+                        pass
 
+                    await asyncio.sleep(5)
+                    logger.info("[RESTART] Yeni tarayici oturumu baslatiliyor...")
+                    try:
+                        browser, context, page = await _launch_browser_session(pw, storage_state)
+                        last_tick_time = time.time() 
+                        logger.info("[RESTART] Tarayici basariyla yeniden baslatildi. [OK]")
+                    except Exception as e:
+                        logger.error(f"[RESTART HATA] Yeniden baslatilamadi: {e}. 30 saniye sonra tekrar denenecek.")
+                        restart_browser = True  
+                        await asyncio.sleep(30)
+
+                await asyncio.sleep(1)
+
+            except Exception as e:
+                logger.error(f"[COLLECTOR HATA] Ana dongu hatasi: {e}")
                 await asyncio.sleep(5)
-                logger.info("[RESTART] Yeni tarayici oturumu baslatiliyor...")
-                try:
-                    browser, page = await _launch_browser_session(storage_state)
-                    last_tick_time = time.time() 
-                    logger.info("[RESTART] Tarayici basariyla yeniden baslatildi. [OK]")
-                except Exception as e:
-                    logger.error(f"[RESTART HATA] Yeniden baslatilamadi: {e}. 30 saniye sonra tekrar denenecek.")
-                    restart_browser = True  
-                    await asyncio.sleep(30)
 
-            await asyncio.sleep(1)
-
-        except Exception as e:
-            logger.error(f"[COLLECTOR HATA] Ana dongu hatasi: {e}")
-            await asyncio.sleep(5)
-
-    try:
-        await browser.stop()
-    except Exception:
-        pass
+        try:
+            await context.close()
+        except Exception:
+            pass
 
 def main():
     global is_running
